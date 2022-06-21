@@ -1,0 +1,97 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Creates a CMK in KMS and grants access to other accounts
+Parameters:
+  pTestAccount:
+    Type: Number
+    Description: AWS AccountNumber for TEST
+  pProductionAccount:
+    Type: Number
+    Description: AWS AccountNumber for production
+  pProjectName:
+    Type: String
+    Description: Name of the Project
+  pCodeBuildCondition:
+    Type: String
+    Default: false
+    Description: Conditionally adds the access required by code build project role
+Conditions:
+  cAddCodeBuildResource: !Equals [ !Ref pCodeBuildCondition, true ]
+Resources:
+  rKmsKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: Used by Assumed Roles in Test/Prod accounts to Encrypt/Decrypt code
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: "2012-10-17"
+        Id: !Ref AWS::StackName
+        Statement:
+          -
+            Sid: Allows admin of the key
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:root
+            Action:
+              - kms:*
+            Resource: "*"
+          -
+            Sid: Allow use of the key
+            Effect: Allow
+            Principal:
+              AWS:
+                - !Sub arn:${AWS::Partition}:iam::${pProductionAccount}:root
+                - !Sub arn:${AWS::Partition}:iam::${pTestAccount}:root
+                - !If
+                  - cAddCodeBuildResource
+                  - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${pProjectName}-${AWS::Region}-CodeBuildRole
+                  - !Ref AWS::NoValue
+            Action:
+              - kms:Encrypt
+              - kms:Decrypt
+              - kms:ReEncrypt*
+              - kms:GenerateDataKey*
+              - kms:DescribeKey
+            Resource: "*"
+      Tags:
+        - Key: StackName
+          Value: !Sub ${AWS::StackName}
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Managedby
+          Value: CloudFormation
+        - Key: Owner
+          Value: Nathan.Bekenov
+  rKmsAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub alias/${pProjectName}-artifact-key
+      TargetKeyId: !Ref rKmsKey
+  rArtifactBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub ${pProjectName}-pipeline-artifacts
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !GetAtt rKmsKey.Arn
+            BucketKeyEnabled: true
+      Tags:
+        - Key: StackName
+          Value: !Sub ${AWS::StackName}
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Managedby
+          Value: CloudFormation
+        - Key: Owner
+          Value: Nathan.Bekenov
+
+Outputs:
+  oCMK:
+    Description: Key arn
+    Value: !GetAtt rKmsKey.Arn
+  oArtifactBucket:
+    Description: The S3 bucket name used for CloudTrail logging
+    Value: !Ref rArtifactBucket

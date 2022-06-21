@@ -1,0 +1,468 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Creates CodePipeline
+Parameters:
+  pProjectName:
+    Type: String
+    Description: Name of the Project
+  pArtifactBucket:
+    Type: String
+    Description: S3 Bucket name in Tools Account, which holds the artifacts built by codebuild
+  pCmkArn:
+    Type: String
+    Description: ARN of the KMS CMK created in Tools account
+  pRepositoryName:
+    Type: String
+    Description: Codecommit repository name
+  pCodeCommitRepoBranch:
+    Type: String
+    Description: The CodeCommit repo branch code pipelines should watch for changes on
+    Default: master
+  pTestAccount:
+    Type: Number
+    Description: AWS AccountNumber for TEST
+  pProductionAccount:
+    Type: Number
+    Description: AWS AccountNumber for production
+  pDevOpsTeamEmail:
+    Type: String
+    Description: DevOps team email used to receive notifications
+    Default: xxxxxxxx
+Resources:
+  rArtifactBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref pArtifactBucket
+      PolicyDocument:
+        Statement:
+          -
+            Action:
+              - s3:Get*
+              - s3:Put*
+              - s3:ListBucket
+            Effect: Allow
+            Resource:
+              - !Sub arn:${AWS::Partition}:s3:::${pArtifactBucket}
+              - !Sub arn:${AWS::Partition}:s3:::${pArtifactBucket}/*
+            Principal:
+              AWS:
+                - !GetAtt rCodeBuildProjectRole.Arn
+                - !GetAtt rCodePipelineRole.Arn
+                - !Sub arn:${AWS::Partition}:iam::${pTestAccount}:role/${pProjectName}-${AWS::Region}-CodePipelineCrossAccountRole
+                - !Sub arn:${AWS::Partition}:iam::${pTestAccount}:role/${pProjectName}-${AWS::Region}-CloudFormationDeploymentRole
+                - !Sub arn:${AWS::Partition}:iam::${pProductionAccount}:role/${pProjectName}-${AWS::Region}-CodePipelineCrossAccountRole
+                - !Sub arn:${AWS::Partition}:iam::${pProductionAccount}:role/${pProjectName}-${AWS::Region}-CloudFormationDeploymentRole
+  rCodeBuildProjectRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+      RoleName: !Sub ${pProjectName}-${AWS::Region}-CodeBuildRole
+      Tags:
+        - Key: StackName
+          Value: !Sub ${AWS::StackName}
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Managedby
+          Value: CloudFormation
+        - Key: Owner
+          Value: Nathan.Bekenov
+  rBuildProjectPolicy:
+    Type: AWS::IAM::Policy
+    DependsOn: rArtifactBucketPolicy
+    Properties:
+      PolicyName: !Sub ${pProjectName}-${AWS::Region}-CodeBuildPolicy
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: Allow
+            Action:
+              - iam:ListPolicies
+              - iam:ListRoles
+              - iam:CreateRole
+              - iam:CreatePolicy
+              - iam:GetRole
+              - iam:DeleteRole
+              - iam:PutRolePolicy
+              - iam:PassRole
+              - iam:DeleteRolePolicy
+              - iam:AttachRolePolicy
+              - iam:DetachRolePolicy
+            Resource: "*"
+          -
+            Effect: Allow
+            Action:
+              - s3:PutObject
+              - s3:GetBucketPolicy
+              - s3:GetObject
+              - s3:ListBucket
+            Resource:
+              - !Sub arn:${AWS::Partition}:s3:::${pArtifactBucket}
+              - !Sub arn:${AWS::Partition}:s3:::${pArtifactBucket}/*
+          -
+            Effect: Allow
+            Action:
+              - kms:DescribeKey
+              - kms:GenerateDataKey*
+              - kms:Encrypt
+              - kms:ReEncrypt*
+              - kms:Decrypt
+            Resource: !Ref pCmkArn
+          -
+            Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: !Sub arn:${AWS::Partition}:logs:${AWS::Region}:*:*
+          -
+            Effect: Allow
+            Action:
+              - codebuild:CreateReportGroup
+              - codebuild:CreateReport
+              - codebuild:BatchPutTestCases
+              - codebuild:UpdateReport
+            Resource: !Sub arn:${AWS::Partition}:codebuild:${AWS::Region}:${AWS::AccountId}:*/${pProjectName}*
+          -
+            Effect: Allow
+            Action:
+              - cloudformation:ValidateTemplate
+              - cloudFormation:List*
+              - cloudformation:Describe*
+            Resource: "*"
+      Roles:
+        -
+          !Ref rCodeBuildProjectRole
+  rCodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub ${pProjectName}-CodeBuildProject
+      Description: !Ref pProjectName
+      EncryptionKey: !Ref pCmkArn
+      ServiceRole: !GetAtt rCodeBuildProjectRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0
+        EnvironmentVariables:
+          - Name: S3_BUCKET_NAME
+            Value: !Ref pArtifactBucket
+          - Name: KMSKey
+            Value: !Ref pCmkArn
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: buildspec.yml
+      TimeoutInMinutes: 10
+      Tags:
+        - Key: StackName
+          Value: !Sub ${AWS::StackName}
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Managedby
+          Value: CloudFormation
+        - Key: Owner
+          Value: Nathan.Bekenov
+  rCodePipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${pProjectName}-codepipeline-role
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - codepipeline.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+  rCodePipelinePolicy:
+    Type: AWS::IAM::Policy
+    DependsOn: rArtifactBucketPolicy
+    Properties:
+      PolicyName: !Sub ${pProjectName}-codepipeline-policy
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: Allow # enable passing a role to its action workers (CodeBuild projects)
+            Action:
+              - iam:PassRole
+            Resource: "*"
+          -
+            Effect: Allow
+            Action:
+              - codecommit:List*
+              - codecommit:Get*
+              - codecommit:BatchGetRepositories
+              - codecommit:GitPull
+              - codecommit:UploadArchive
+              - codecommit:CancelUploadArchive
+            Resource: !Sub arn:${AWS::Partition}:codecommit:${AWS::Region}:${AWS::AccountId}:${pRepositoryName}
+          -
+            Effect: Allow
+            Action:
+              - codebuild:BatchGetBuilds
+              - codebuild:StartBuild
+              - codebuild:CreateReportGroup
+            Resource: !Sub arn:${AWS::Partition}:codebuild:${AWS::Region}:${AWS::AccountId}:*/${pProjectName}*
+          -
+            Effect: Allow
+            Action:
+              - codedeploy:CreateDeployment
+              - codedeploy:GetApplication
+              - codedeploy:GetApplicationRevision
+              - codedeploy:GetDeployment
+              - codedeploy:GetDeploymentConfig
+              - codedeploy:RegisterApplicationRevision
+            Resource: "*"
+          -
+            Effect: Allow
+            Action:
+              - cloudFormation:List*
+              - cloudformation:CreateStack
+              - cloudformation:DeleteStack
+              - cloudformation:DescribeStacks
+              - cloudformation:UpdateStack
+              - cloudformation:CreateChangeSet
+              - cloudformation:DeleteChangeSet
+              - cloudformation:DescribeChangeSet
+              - cloudformation:ExecuteChangeSet
+              - cloudformation:SetStackPolicy
+              - cloudformation:ValidateTemplate
+            Resource: "*"
+          -
+            Effect: Allow
+            Action:
+              - kms:Encrypt
+              - kms:Decrypt
+              - kms:ReEncrypt*
+              - kms:GenerateDataKey*
+              - kms:DescribeKey
+            Resource: !Ref pCmkArn
+          -
+            Effect: Allow
+            Action:
+              - s3:PutObject
+              - s3:GetBucketPolicy
+              - s3:GetObject
+              - s3:ListBucket
+              - s3:GetBucketLocation
+              - s3:ListAllMyBuckets
+            Resource:
+              - !Sub arn:${AWS::Partition}:s3:::${pArtifactBucket}/*
+              - !Sub arn:${AWS::Partition}:s3:::${pArtifactBucket}
+          -
+            Effect: Allow # enable assuming a role its action workers (CloudFormation) are executed under
+            Action:
+              - sts:AssumeRole 
+            Resource:
+              - !Sub arn:${AWS::Partition}:iam::${pProductionAccount}:role/${pProjectName}-${AWS::Region}-CodePipelineCrossAccountRole
+              - !Sub arn:${AWS::Partition}:iam::${pTestAccount}:role/${pProjectName}-${AWS::Region}-CodePipelineCrossAccountRole
+          -
+            Effect: Allow
+            Action:
+              - sns:Publish
+            Resource: !Ref rPipelineNotificationTopic
+      Roles:
+        -
+          !Ref rCodePipelineRole
+  rPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    DependsOn: rCodePipelinePolicy
+    Properties:
+      ArtifactStore:
+        Type: S3
+        Location: !Ref pArtifactBucket
+        EncryptionKey:
+          Id: !Ref pCmkArn
+          Type: KMS
+      Name: !Sub ${pProjectName}-codepipeline
+      RoleArn: !GetAtt rCodePipelineRole.Arn
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: App
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: '1'
+                Provider: CodeCommit
+              Configuration:
+                RepositoryName: !Ref pRepositoryName
+                BranchName: !Ref pCodeCommitRepoBranch
+              OutputArtifacts:
+                - Name: !Sub ${pProjectName}-SCCheckoutArtifact
+              RunOrder: 1
+        - Name: Build
+          Actions:
+            - Name: Build
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: '1'
+                Provider: CodeBuild
+              Configuration:
+                ProjectName: !Ref rCodeBuildProject
+              InputArtifacts:
+                - Name: !Sub ${pProjectName}-SCCheckoutArtifact
+              OutputArtifacts:
+                - Name: !Sub ${pProjectName}-BuildOutput
+              RunOrder: 1
+        - Name: DeployToTest
+          Actions:
+            - Name: CreateChangeSetTest
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: '1'
+                Provider: CloudFormation
+              Configuration:
+                ChangeSetName: !Sub ${pProjectName}-app-changeset-test
+                ActionMode: CHANGE_SET_REPLACE
+                StackName: !Sub ${pProjectName}-app-stack-test
+                Capabilities: CAPABILITY_NAMED_IAM,CAPABILITY_AUTO_EXPAND
+                TemplatePath: !Sub ${pProjectName}-BuildOutput::package.yml
+                TemplateConfiguration: !Sub ${pProjectName}-BuildOutput::test-configuration.json
+                RoleArn: !Sub arn:${AWS::Partition}:iam::${pTestAccount}:role/${pProjectName}-${AWS::Region}-CloudFormationDeploymentRole
+              InputArtifacts:
+                - Name: !Sub ${pProjectName}-BuildOutput
+              RoleArn: !Sub arn:${AWS::Partition}:iam::${pTestAccount}:role/${pProjectName}-${AWS::Region}-CodePipelineCrossAccountRole
+              RunOrder: 1
+            - Name: DeployChangeSetTest
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: '1'
+                Provider: CloudFormation
+              Configuration:
+                ChangeSetName: !Sub ${pProjectName}-app-changeset-test
+                ActionMode: CHANGE_SET_EXECUTE
+                StackName: !Sub ${pProjectName}-app-stack-test
+                RoleArn: !Sub arn:${AWS::Partition}:iam::${pTestAccount}:role/${pProjectName}-${AWS::Region}-CloudFormationDeploymentRole
+              InputArtifacts:
+                - Name: !Sub ${pProjectName}-BuildOutput
+              RoleArn: !Sub arn:${AWS::Partition}:iam::${pTestAccount}:role/${pProjectName}-${AWS::Region}-CodePipelineCrossAccountRole
+              RunOrder: 2
+        - Name: ApproveDeployProd
+          Actions:
+            - Name: manual-approval
+              ActionTypeId:
+                Category: Approval
+                Owner: AWS
+                Version: '1'
+                Provider: Manual
+              Configuration:
+                CustomData: "Log into the TEST account and test out your changes before approving."
+                NotificationArn: !Ref rPipelineNotificationTopic
+        - Name: DeployToProduction
+          Actions:
+            - Name: CreateChangeSetProd
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: '1'
+                Provider: CloudFormation
+              Configuration:
+                ChangeSetName: !Sub ${pProjectName}-app-changeset-prod
+                ActionMode: CHANGE_SET_REPLACE
+                StackName: !Sub "${pProjectName}-app-stack-prod"
+                Capabilities: CAPABILITY_NAMED_IAM,CAPABILITY_AUTO_EXPAND
+                TemplatePath: !Sub ${pProjectName}-BuildOutput::package.yml
+                TemplateConfiguration: !Sub ${pProjectName}-BuildOutput::prod-configuration.json
+                RoleArn: !Sub arn:${AWS::Partition}:iam::${pProductionAccount}:role/${pProjectName}-${AWS::Region}-CloudFormationDeploymentRole
+              InputArtifacts:
+                - Name: !Sub ${pProjectName}-BuildOutput
+              RoleArn: !Sub arn:${AWS::Partition}:iam::${pProductionAccount}:role/${pProjectName}-${AWS::Region}-CodePipelineCrossAccountRole
+              RunOrder: 1
+            - Name: DeployChangeSetProd
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: '1'
+                Provider: CloudFormation
+              Configuration:
+                ChangeSetName: !Sub ${pProjectName}-app-changeset-prod
+                ActionMode: CHANGE_SET_EXECUTE
+                StackName: !Sub ${pProjectName}-app-stack-prod
+                RoleArn: !Sub arn:${AWS::Partition}:iam::${pProductionAccount}:role/${pProjectName}-${AWS::Region}-CloudFormationDeploymentRole
+              InputArtifacts:
+                - Name: !Sub ${pProjectName}-BuildOutput
+              RoleArn: !Sub arn:${AWS::Partition}:iam::${pProductionAccount}:role/${pProjectName}-${AWS::Region}-CodePipelineCrossAccountRole
+              RunOrder: 2
+      Tags:
+        - Key: StackName
+          Value: !Sub ${AWS::StackName}
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Managedby
+          Value: CloudFormation
+        - Key: Owner
+          Value: Nathan.Bekenov
+
+  rPipelineNotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub ${pProjectName}-pipeline-notification
+      Subscription:
+        - Endpoint: !Ref pDevOpsTeamEmail
+          Protocol: email
+
+  rPipelineNotificationTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+        - !Ref rPipelineNotificationTopic
+      PolicyDocument:
+        Version: "2012-10-17"
+        Id: "__default_policy_ID"
+        Statement:
+          - Sid: AWSEvents
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sns:Publish
+            Resource: !Ref rPipelineNotificationTopic
+          - Sid: AWSCodePipeline
+            Effect: Allow
+            Principal:
+              Service: codestar-notifications.amazonaws.com
+            Action: sns:Publish
+            Resource: !Ref rPipelineNotificationTopic
+
+  PipelineFailedEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: !Sub Pipeline Failed Event Rule
+      EventPattern:
+        source:
+          - aws.codepipeline
+        detail-type:
+          - CodePipeline Pipeline Execution State Change
+        detail:
+          state:
+          - FAILED
+          pipeline:
+          - !Sub ${pProjectName}-codepipeline
+      State: "ENABLED"
+      Targets:
+      - Arn: !Ref rPipelineNotificationTopic
+        Id: "FailedTopic"
+        InputTransformer:
+          InputTemplate:
+            Fn::Sub: >
+              "Pipeline <pipeline> has failed. Details available at https://console.aws.amazon.com/codepipeline/home?region=${AWS::Region}#/view/<pipeline>"
+          InputPathsMap:
+            pipeline: "$.detail.pipeline"

@@ -1,0 +1,264 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Creates IAM Roles to be assumed by CodePipeline
+Parameters:
+  pProjectName:
+    Type: String
+    Description: Name of the Project
+  pArtifactBucket:
+    Type: String
+    Description: S3 Bucket name in Tools Account, which holds the artifacts built by codebuild
+  pToolsAccount:
+    Type: Number
+    Description: AWS AccountNumber for Tools account
+  pCmkArn:
+    Type: String
+    Description: ARN of the KMS CMK creates in Tools account
+Resources:
+  rCodePipelineCrossAccountRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              AWS:
+                - !Ref pToolsAccount
+            Action:
+              - sts:AssumeRole
+      Path: /
+      RoleName: !Sub ${pProjectName}-${AWS::Region}-CodePipelineCrossAccountRole
+      Tags:
+        - Key: StackName
+          Value: !Sub ${AWS::StackName}
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Managedby
+          Value: CloudFormation
+        - Key: Owner
+          Value: Nathan.Bekenov
+  rCodePipelineCrossAccountPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub ${pProjectName}-${AWS::Region}-CodePipelineCrossAccountPolicy
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: Allow
+            Action:
+              - iam:PassRole
+            Resource: "*"
+          -
+            Effect: Allow
+            Action:
+              - cloudformation:*
+              - codebuild:*
+            Resource: "*"
+          -
+            Effect: Allow
+            Action:
+              - kms:DescribeKey
+              - kms:GenerateDataKey*
+              - kms:Encrypt
+              - kms:ReEncrypt*
+              - kms:Decrypt
+            Resource: !Ref pCmkArn
+          -
+            Effect: Allow
+            Action:
+              - s3:Get*
+              - s3:Put*
+              - s3:ListBucket
+            Resource:
+              - !Sub "arn:${AWS::Partition}:s3:::${pArtifactBucket}/*"
+              - !Sub "arn:${AWS::Partition}:s3:::${pArtifactBucket}"
+      Roles:
+        -
+          !Ref rCodePipelineCrossAccountRole
+  rCloudFormationDeploymentRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - cloudformation.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+      RoleName: !Sub ${pProjectName}-${AWS::Region}-CloudFormationDeploymentRole
+      Tags:
+        - Key: StackName
+          Value: !Sub ${AWS::StackName}
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Managedby
+          Value: CloudFormation
+        - Key: Owner
+          Value: Nathan.Bekenov
+  rCloudFormationDeploymentPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub ${pProjectName}-${AWS::Region}-CloudFormationDeploymentPolicy
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: Allow
+            Action:
+              - ec2:*
+              - elasticloadbalancing:*
+              - efs:*
+              - elasticfilesystem:*
+              - secretsmanager:*
+              - rds:*
+              - ssm:*
+              - lambda:*
+              - codedeploy:*
+              - kms:*
+              - sns:*
+              - ecs:*
+              - ecr:*
+              - route53:*
+              - acm:*
+              - cloudfront:*
+              - events:*
+              - cloudwatch:*
+              - autoscaling:*
+              - application-autoscaling:*
+              - tag:GetResources
+              - s3:*
+              - wafv2:*
+              - waf-regional:*
+              - waf:*
+              - cloudtrail:*
+            Resource: "*"
+          -
+            Effect: Allow
+            Action:
+              - cloudwatch:*
+              - logs:*
+            Resource: "*"
+          -
+            Effect: Allow
+            Action:
+              - iam:ListRoles
+              - iam:CreateRole
+              - iam:CreateServiceLinkedRole
+              - iam:GetRole
+              - iam:DeleteRole
+              - iam:ListPolicies
+              - iam:CreatePolicy
+              - iam:PutRolePolicy
+              - iam:getRolePolicy
+              - iam:DeleteRolePolicy
+              - iam:AttachRolePolicy
+              - iam:DetachRolePolicy
+              - iam:TagResource
+            Resource: "*"
+          -
+            Effect: Allow
+            Action:
+              - iam:PassRole
+            Resource: "*"
+          -
+            Effect: Allow
+            Action:
+              - cloudFormation:List*
+              - cloudformation:CreateStack
+              - cloudformation:DescribeStack*
+              - cloudformation:GetStackPolicy
+              - cloudformation:GetTemplate*
+              - cloudformation:SetStackPolicy
+              - cloudformation:UpdateStack
+              - cloudformation:ValidateTemplate
+              - cloudformation:CreateChangeSet
+              - cloudformation:DeleteChangeSet
+              - cloudformation:DescribeChangeSet
+              - cloudformation:ExecuteChangeSet
+              - cloudformation:SetStackPolicy
+            Resource: "*"
+          -
+            Effect: Allow
+            Action:
+              - s3:GetBucket*
+              - s3:GetObject*
+              - s3:List*
+            Resource:
+              - !Sub arn:${AWS::Partition}:s3:::${pArtifactBucket}/*
+              - !Sub arn:${AWS::Partition}:s3:::${pArtifactBucket}
+              - !Sub arn:${AWS::Partition}:s3:::secrets-manager-rotation-apps-*/*
+              - !Sub arn:${AWS::Partition}:s3:::awsserverlessrepo-changesets*
+          -
+            Effect: Allow
+            Action:
+              - serverlessrepo:CreateCloudFormationChangeSet
+              - serverlessrepo:GetApplication
+            Resource:
+              - !Sub arn:${AWS::Partition}:serverlessrepo:*:*:applications/SecretsManager*
+      Roles:
+        -
+          !Ref rCloudFormationDeploymentRole
+
+  rCodeBuildCrossTargetAccountRole: # role in target account that will be assumed by codebild in tools account
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${pProjectName}-${AWS::Region}-CodeBuildCrossTargetAccountRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              AWS:
+                - !Ref pToolsAccount
+            Action:
+              - sts:AssumeRole
+      Path: /
+      Tags:
+        - Key: StackName
+          Value: !Sub ${AWS::StackName}
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Managedby
+          Value: CloudFormation
+        - Key: Owner
+          Value: Nathan.Bekenov
+
+  rCodeBuildCrossTargetAccountPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub ${pProjectName}-${AWS::Region}-CodeBuildCrossTargetAccountPolicy
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: Allow
+            Action:
+              - iam:PassRole
+              - secretsmanager:ListSecretVersionIds
+              - secretsmanager:ListSecrets
+              - elasticfilesystem:DescribeMountTargets
+              - elasticfilesystem:DescribeFileSystems
+              - rds:DescribeDBClusters
+              - logs:DescribeLogGroups
+              - ssm:DescribeParameters
+              - ssm:PutParameter
+              - codedeploy:*
+              - ecs:RegisterTaskDefinition
+            Resource: "*"
+          -
+            Effect: Allow
+            Action:
+              - s3:*
+            Resource: 
+              - !Sub "arn:${AWS::Partition}:s3:::appspec-bucket-*"
+              - !Sub "arn:${AWS::Partition}:s3:::appspec-bucket-*/*"
+      Roles:
+        -
+          !Ref rCodeBuildCrossTargetAccountRole
