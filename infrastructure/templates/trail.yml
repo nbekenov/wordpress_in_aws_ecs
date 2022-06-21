@@ -1,0 +1,226 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Create CloudTrail
+Parameters:
+  pProjectName:
+    Type: String
+    Description: Name of the Project
+  pEnvironmentName:
+    Type: String
+    Description: An environment name that will be prefixed to resource names
+  pDevOpsTeamEmail:
+    Type: String
+    Description: Admin email addres to get notifications
+
+Resources:
+  rTrailSnsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub ${pProjectName}-cloudtrail-notifications
+      KmsMasterKeyId: !Sub arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:alias/aws/sns
+      Subscription:
+        - Endpoint: !Ref pDevOpsTeamEmail
+          Protocol: email
+
+  rTrailSnsTopicPolicy: 
+    Type: AWS::SNS::TopicPolicy
+    Properties: 
+      Topics: 
+        - !Ref rTrailSnsTopic
+      PolicyDocument: 
+        Version: "2012-10-17"
+        Statement: 
+          - 
+            Sid: "AWSCloudTrailSNSPolicy"
+            Effect: "Allow"
+            Principal: 
+              Service: "cloudtrail.amazonaws.com"
+            Resource: "*"
+            Action: "SNS:Publish"
+          - 
+            Sid: "AllowCloudWatchEvents"
+            Effect: "Allow"
+            Principal: 
+              Service: "events.amazonaws.com"
+            Resource: "*"
+            Action: "SNS:Publish"
+
+  rTrailLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "${pProjectName}-trail-log"
+      RetentionInDays: 60
+      KmsKeyId: !GetAtt rCloudTrailEncryptionKey.Arn
+
+  # bucket where we will store cloudtrail logs    
+  rTrailBucket:
+    Type: AWS::S3::Bucket
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W35
+            reason: "access logging is not required during POC"
+    DeletionPolicy: Delete
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      Tags:
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Environment
+          Value: !Ref pEnvironmentName
+
+  rTrailBucketPolicy: 
+    Type: AWS::S3::BucketPolicy
+    Properties: 
+      Bucket: !Ref rTrailBucket
+      PolicyDocument: 
+        Version: "2012-10-17"
+        Statement: 
+          - Effect: "Allow"
+            Principal: 
+              Service: "cloudtrail.amazonaws.com"
+            Action: 
+              - "s3:GetBucketAcl"
+            Resource: 
+              - !Sub "arn:${AWS::Partition}:s3:::${rTrailBucket}"
+          - Effect: "Allow"
+            Principal: 
+              Service: "cloudtrail.amazonaws.com"
+            Action: 
+              - "s3:PutObject"
+            Resource:
+              - !Sub "arn:${AWS::Partition}:s3:::${rTrailBucket}/AWSLogs/${AWS::AccountId}/*"
+
+  rCloudTrailRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W28
+            reason: "trade-off for user frienly names in POC"
+    Properties:
+      RoleName: !Sub "${pProjectName}-cloudtrail-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - cloudtrail.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'        
+      Policies:
+        - PolicyName: !Sub "${pProjectName}-cloudtrail-policy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: 
+                  - logs:CreateLogStream
+                Resource: 
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${rTrailLogGroup}:log-stream:*" 
+              - Effect: Allow
+                Action: 
+                  - logs:PutLogEvents
+                Resource: 
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${rTrailLogGroup}:log-stream:*"
+
+  rCloudTrail:
+    Type: AWS::CloudTrail::Trail
+    DependsOn: 
+      - rTrailBucketPolicy
+    Properties:
+      TrailName: !Sub "${pProjectName}-cloudtrail"
+      CloudWatchLogsLogGroupArn: !GetAtt [rTrailLogGroup, Arn]
+      CloudWatchLogsRoleArn: !GetAtt [rCloudTrailRole, Arn]
+      IsLogging: true
+      S3BucketName: !Ref rTrailBucket
+      KMSKeyId: !Ref rCloudTrailEncryptionKeyAlias
+      Tags:
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Environment
+          Value: !Ref pEnvironmentName
+
+
+  rCloudTrailEncryptionKey:
+    Type: AWS::KMS::Key
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: F76
+            reason: "Conditions are included in the policy to limit its scope"
+    Properties:
+      Description: Used to encrypt cloudtrail logs
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: 2012-10-17
+        Id: !Ref AWS::StackName
+        Statement:
+          - Sid: "Enable IAM User Permissions"
+            Effect: Allow
+            Principal:
+              AWS:
+                - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:root
+            Action: kms:*
+            Resource: "*"
+          - Sid: "Allow CloudTrail to encrypt logs"
+            Effect: Allow
+            Principal:
+              Service: "cloudtrail.amazonaws.com"
+            Action:
+              - kms:GenerateDataKey*
+            Resource: "*"
+            Condition:
+              StringEquals:
+                "AWS:SourceArn": !Sub "arn:${AWS::Partition}:cloudtrail:${AWS::Region}:${AWS::AccountId}:trail/${pProjectName}-cloudtrail"
+              StringLike:
+                "kms:EncryptionContext:aws:cloudtrail:arn": !Sub "arn:${AWS::Partition}:cloudtrail:*:${AWS::AccountId}:trail/*"
+          - Sid: "Allow CloudTrail to describe key"
+            Effect: Allow
+            Principal:
+              Service: "cloudtrail.amazonaws.com"
+            Action:
+              - kms:DescribeKey
+            Resource: "*"
+          - Sid: "Allow principals in the account to decrypt log files"
+            Effect: Allow
+            Principal:
+              AWS: "*"
+            Action: 
+              - kms:Decrypt
+              - kms:ReEncryptFrom
+            Resource: "*"
+            Condition:
+              StringEquals:
+                "kms:CallerAccount": !Ref AWS::AccountId
+              StringLike:
+                "kms:EncryptionContext:aws:cloudtrail:arn": !Sub "arn:${AWS::Partition}:cloudtrail:*:${AWS::AccountId}:trail/*"
+          - Sid: "Allow logs to use key"
+            Effect: Allow
+            Principal:
+              Service: !Sub "logs.${AWS::Region}.amazonaws.com"
+            Action: 
+              - kms:Encrypt*
+              - kms:Decrypt*
+              - kms:ReEncrypt*
+              - kms:GenerateDataKey*
+              - kms:Describe*
+            Resource: "*"
+            Condition:
+              ArnEquals:
+                "kms:EncryptionContext:aws:logs:arn": !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*"
+
+      Tags:
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Environment
+          Value: !Ref pEnvironmentName
+  
+  rCloudTrailEncryptionKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub alias/${pProjectName}-cloudtrail-key
+      TargetKeyId: !Ref rCloudTrailEncryptionKey

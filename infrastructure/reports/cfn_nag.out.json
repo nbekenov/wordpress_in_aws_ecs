@@ -1,0 +1,65 @@
+[
+  {
+    "filename": "templates/dns.yml",
+    "file_results": {
+      "failure_count": 0,
+      "violations": [
+
+      ]
+    }
+  },
+  {
+    "filename": "templates/ecs.yml",
+    "file_results": {
+      "failure_count": 0,
+      "violations": [
+
+      ]
+    }
+  },
+  {
+    "filename": "templates/efs.yml",
+    "file_results": {
+      "failure_count": 0,
+      "violations": [
+
+      ]
+    }
+  },
+  {
+    "filename": "templates/main.yml",
+    "file_results": {
+      "failure_count": 0,
+      "violations": [
+
+      ]
+    }
+  },
+  {
+    "filename": "templates/rds.yml",
+    "file_results": {
+      "failure_count": 0,
+      "violations": [
+
+      ]
+    }
+  },
+  {
+    "filename": "templates/trail.yml",
+    "file_results": {
+      "failure_count": 0,
+      "violations": [
+
+      ]
+    }
+  },
+  {
+    "filename": "templates/vpc.yml",
+    "file_results": {
+      "failure_count": 0,
+      "violations": [
+
+      ]
+    }
+  }
+]

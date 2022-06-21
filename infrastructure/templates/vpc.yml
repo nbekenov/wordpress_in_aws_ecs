@@ -1,0 +1,350 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Create VPC
+Parameters:
+  pProjectName:
+    Type: String
+    Description: Name of the Project
+  pEnvironmentName:
+    Type: String
+    Description: An environment name that will be prefixed to resource names
+  pVpcCidrBlock:
+    Type: String
+    Description: The CIDR block for the VPC
+  pPublic1Cidr:
+    Type: String
+    Description: The CIDR block for the public subnet located in Availability Zone 1
+  pPublic2Cidr:
+    Type: String
+    Description: The CIDR block for the public subnet located in Availability Zone 2
+  pPrivate1Cidr:
+    Type: String
+    Description: The CIDR block for the private subnet located in Availability Zone 1
+  pPrivate2Cidr:
+    Type: String
+    Description: The CIDR block for the private subnet located in Availability Zone 2
+  pVPCFlowLogsLogFormat:
+    Type: String
+    Description:
+      The fields to include in the flow log record, in the order in which they should appear. Specify the fields using the ${field-id} format,
+      separated by spaces. Using the Default Format as the default value.
+    AllowedPattern: '^(\$\{[a-z-]+\})$|^((\$\{[a-z-]+\} )*\$\{[a-z-]+\})$'
+    Default:
+      '${version} ${account-id} ${interface-id} ${srcaddr} ${dstaddr} ${srcport} ${dstport} ${protocol} ${packets} ${bytes} ${start} ${end} ${action}
+      ${log-status}'
+  pVPCFlowLogsTrafficType:
+    Type: String
+    Description: The type of traffic to log. You can log traffic that the resource accepts or rejects, or all traffic.
+    AllowedValues: [ACCEPT, ALL, REJECT]
+    Default: REJECT
+
+Resources:
+  rVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref pVpcCidrBlock
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${pProjectName}-VPC
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Environment
+          Value: !Ref pEnvironmentName
+
+  rInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${pProjectName}-IGW
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Environment
+          Value: !Ref pEnvironmentName
+
+  rInternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref rInternetGateway
+      VpcId: !Ref rVPC
+
+  ## Subnets
+  rVpcPublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W33
+            reason: "MapPublicIpOnLaunch required to be true"
+    Properties:
+      VpcId: !Ref rVPC
+      CidrBlock: !Ref pPublic1Cidr
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${pProjectName}-VPC-publicSubnet1
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Environment
+          Value: !Ref pEnvironmentName
+
+  rVpcPublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W33
+            reason: "MapPublicIpOnLaunch required to be true"
+    Properties:
+      VpcId: !Ref rVPC
+      CidrBlock: !Ref pPublic2Cidr
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${pProjectName}-VPC-publicSubnet2
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Environment
+          Value: !Ref pEnvironmentName
+
+  rVpcPrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref rVPC
+      CidrBlock: !Ref pPrivate1Cidr
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${pProjectName}-VPC-privateSubnet1
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Environment
+          Value: !Ref pEnvironmentName
+
+  rVpcPrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref rVPC
+      CidrBlock: !Ref pPrivate2Cidr
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${pProjectName}-VPC-privateSubnet2
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Environment
+          Value: !Ref pEnvironmentName
+
+  ## NatGateways
+  rElasticIP1:
+    Type: AWS::EC2::EIP
+    DependsOn: rInternetGatewayAttachment
+    Properties: 
+      Domain: vpc
+
+  rElasticIP2:
+    Type: AWS::EC2::EIP
+    DependsOn: rInternetGatewayAttachment
+    Properties: 
+      Domain: vpc
+
+  rNatGateway1:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt rElasticIP1.AllocationId
+      SubnetId: !Ref rVpcPublicSubnet1
+
+  rNatGateway2:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt rElasticIP2.AllocationId
+      SubnetId: !Ref rVpcPublicSubnet2
+
+  ## Route tables
+  ### Public Subnets
+  rPublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref rVPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${pProjectName}-VPC-public-route-table
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Environment
+          Value: !Ref pEnvironmentName
+
+  rDefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: rInternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref rPublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref rInternetGateway
+
+  rPublicSubnetRouteTableAssociation1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref rPublicRouteTable
+      SubnetId: !Ref rVpcPublicSubnet1
+
+  rPublicSubnetRouteTableAssociation2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref rPublicRouteTable
+      SubnetId: !Ref rVpcPublicSubnet2
+
+  ### Private Subnets
+  rPrivateRouteTable1:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref rVPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${pProjectName}-VPC-private-route-table-1
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Environment
+          Value: !Ref pEnvironmentName
+
+  rPrivateRouteToInternet1:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref rPrivateRouteTable1
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref rNatGateway1
+
+  rPrivateSubnetRouteTableAssociation1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref rPrivateRouteTable1
+      SubnetId: !Ref rVpcPrivateSubnet1
+
+  rPrivateRouteTable2:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref rVPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${pProjectName}-VPC-private-route-table-2
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Environment
+          Value: !Ref pEnvironmentName
+          
+  rPrivateRouteToInternet2:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref rPrivateRouteTable2
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref rNatGateway2
+
+  rPrivateSubnetRouteTableAssociation2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref rPrivateRouteTable2
+      SubnetId: !Ref rVpcPrivateSubnet2
+
+  rVPCFlowLogsBucket:
+    Type: AWS::S3::Bucket
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W35
+            reason: "access logging not necesary in this POC"
+    Properties:
+      BucketName: !Sub aws-vpcflowlogs-${AWS::AccountId}-${AWS::Region}
+      AccessControl: Private
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Environment
+          Value: !Ref pEnvironmentName
+
+  rVPCFlowLogsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref rVPCFlowLogsBucket
+      PolicyDocument:
+        Statement:
+          - Sid: AWSLogDeliveryWrite
+            Effect: Allow
+            Action: s3:PutObject
+            Resource: !Sub arn:${AWS::Partition}:s3:::${rVPCFlowLogsBucket}/*
+            Principal:
+              Service: delivery.logs.amazonaws.com
+            Condition:
+              StringEquals:
+                s3:x-amz-acl: bucket-owner-full-control
+          - Sid: AWSLogDeliveryAclCheck
+            Effect: Allow
+            Action: 
+              - s3:GetBucketAcl
+              - s3:ListBucket
+            Resource: !Sub arn:${AWS::Partition}:s3:::${rVPCFlowLogsBucket}
+            Principal:
+              Service: delivery.logs.amazonaws.com
+
+  rVPCFlowLogstoS3:
+    Type: AWS::EC2::FlowLog
+    Properties:
+      LogDestinationType: s3
+      LogDestination: !GetAtt rVPCFlowLogsBucket.Arn
+      LogFormat: !Ref pVPCFlowLogsLogFormat
+      ResourceId: !Ref rVPC
+      ResourceType: VPC
+      TrafficType: !Ref pVPCFlowLogsTrafficType
+      Tags:
+        - Key: Name
+          Value: VPC Flow Logs S3
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Environment
+          Value: !Ref pEnvironmentName
+
+
+Outputs:
+  oVpcId:
+    Description: VPC ID
+    Value: !Ref rVPC
+  oVpcCidrBlock:
+    Description: VPC CIDR
+    Value: !GetAtt rVPC.CidrBlock   
+  oPublicSubnet1:
+    Description: PublicSubnet1 ID
+    Value: !Ref rVpcPublicSubnet1
+  oPublicSubnet2:
+    Description: PublicSubnet2 ID
+    Value: !Ref rVpcPublicSubnet2
+  oPrivateubnet1:
+    Description: PrivateSubnet1 ID
+    Value: !Ref rVpcPrivateSubnet1
+  oPrivateSubnet2:
+    Description: PrivateSubnet2 ID
+    Value: !Ref rVpcPrivateSubnet2
+  oVPCFlowLogsBucket:
+    Description: S3 bucket name where VPC Flow Log data will be published
+    Value: !Ref rVPCFlowLogsBucket
+  oPrivateRouteTable1:
+    Description: PrivateRouteTable1
+    Value: !Ref rPrivateRouteTable1
+  oPrivateRouteTable2:
+    Description: PrivateRouteTable2
+    Value: !Ref rPrivateRouteTable2
+  oPublicRouteTable:
+    Description: Public route table
+    Value: !Ref rPublicRouteTable

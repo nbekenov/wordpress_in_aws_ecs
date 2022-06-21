@@ -1,0 +1,718 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Create ECS cluster and Fargate service
+Parameters:
+  pProjectName:
+    Type: String
+    Description: Name of the Project
+  pEnvironmentName:
+    Type: String
+    Description: An environment name that will be prefixed to resource names
+  pDomainName:
+    Type: String
+    Description: Website domain name
+  pAlbSecurityGroup:
+    Type: String
+    Description: ALB Security group id
+  pAlbTargetGroup:
+    Type: String
+    Description: ALB Target Group Arn
+  pAlbTargetGroup1:
+    Type: String
+    Description: ALB Blue Target Group-1 Name
+  pAlbTargetGroup2:
+    Type: String
+    Description: ALB Blue Target Group-2 Name
+  pAlbProductionListenerArn:
+    Type: String
+    Description: ALB Prod listener Arn
+  pDataBaseCredentials:
+    Type: String
+    Description: Credentials for RDS database
+  pAuthKey:
+    Type: String
+    Description: WORDPRESS_AUTH_KEY
+  pSecureAuthKey:
+    Type: String
+    Description: WORDPRESS_SECURE_AUTH_KEY
+  pLoggedInKey:
+    Type: String
+    Description: WORDPRESS_LOGGED_IN_KEY
+  pNonceKey:
+    Type: String
+    Description: WORDPRESS_NONCE_KEY
+  pAuthSalt:
+    Type: String
+    Description: WORDPRESS_AUTH_SALT
+  pSecureAuthSalt:
+    Type: String
+    Description: WORDPRESS_SECURE_AUTH_SALT
+  pLoggedInSalt:
+    Type: String
+    Description: WORDPRESS_LOGGED_IN_SALT
+  pNonceSalt:
+    Type: String
+    Description: WORDPRESS_NONCE_SALT
+  pDBName:
+    Type: String
+    Description: Amazon Aurora DB name 
+  pAuroraClusterEndpoint:
+    Type: String
+    Description: Amazon Aurora Cluster endpoint
+  pFileSystem:
+    Type: String
+    Description: EFS ID
+  pVpcId:
+    Type: String
+    Description: VPC ID
+  pVpcPrivateSubnet1Id:
+    Type: String
+    Description: Private subnet ID
+  pVpcPrivateSubnet2Id:
+    Type: String
+    Description: Private subnet ID
+  pServiceMinSize:
+    Type: Number
+    Description: Minimum number of tasks that can be launched
+  pServiceMaxSize:
+    Type: Number
+    Description: Maximum number of tasks that can be launched
+  pTerminationWaitTimeInMinutes:
+    Type: Number
+    Description: The number of minutes before deleting the original (blue) task set
+  pImageUri:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: '/demo-app/wordpress/image_uri'
+    Description: Image Uri # wordpress:5.9-apache 
+  pVpcCidrBlock:
+    Type: String
+    Description: The CIDR block for the VPC
+  pPublicRouteTable:
+    Type: String
+  pPrivateRouteTable1:
+    Type: String
+  pPrivateRouteTable2:
+    Type: String
+  pDeploymentConfiguration:
+    Type: String
+    Description: Predefined deployment configurations for an Amazon ECS compute platform
+    Default: CodeDeployDefault.ECSCanary10Percent5Minutes # Shifts 10 percent of traffic in the first increment. The remaining 90 percent is deployed five minutes later.
+    AllowedValues:
+      - CodeDeployDefault.ECSLinear10PercentEvery1Minutes
+      - CodeDeployDefault.ECSLinear10PercentEvery3Minutes
+      - CodeDeployDefault.ECSCanary10Percent5Minutes
+      - CodeDeployDefault.ECSCanary10Percent15Minutes
+      - CodeDeployDefault.ECSAllAtOnce
+
+Resources:
+  rEcsCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub ${pProjectName}-ecs-cluster
+      Configuration:
+        ExecuteCommandConfiguration:
+          Logging: DEFAULT
+      Tags:
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Environment
+          Value: !Ref pEnvironmentName
+
+  rEcsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W5
+            reason: "allo egress from everywhere"
+          - id: W40
+            reason: "allo egress with an ipProtocol of -1"
+          - id: W28
+            reason: "trade-off for user frienly names in POC"
+    Properties:
+      GroupDescription: ECS Security Group
+      VpcId: !Ref pVpcId
+      GroupName: !Sub ${pProjectName}-ECS-SG
+      SecurityGroupIngress:
+        - SourceSecurityGroupId: !Ref pAlbSecurityGroup
+          Description: "allow connections from ALB"
+          FromPort: 80
+          ToPort: 80
+          IpProtocol: "tcp"
+      SecurityGroupEgress:
+        - CidrIp: 0.0.0.0/0
+          Description: "allow all outbound traffic by default"
+          IpProtocol: "-1"
+
+  rTaskDefLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: 
+      LogGroupName: !Sub ${pProjectName}-ecs-logs
+      RetentionInDays: 30
+      KmsKeyId: !GetAtt rEcsLogGroupEncryptionKey.Arn
+      Tags:
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Environment
+          Value: !Ref pEnvironmentName
+  
+  rEcsExecutionRole: # An IAM Role for the Fargate agent to make AWS API calls on your behalf
+    Type: AWS::IAM::Role
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W28
+            reason: "trade-off for user frienly names in POC"
+          - id: W11
+            reason: "look at the comments"
+          - id: W76
+            reason: "look at the comments"
+    Properties:
+      RoleName: !Sub ${pProjectName}-${AWS::Region}-EcsExecutionRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: 
+                - ecs-tasks.amazonaws.com
+                - ecs.amazonaws.com
+            Action: 
+              - sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: !Sub ${pProjectName}-${AWS::Region}-EcsExecutionPolicy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow # to download images from ECR
+                Action:
+                  - ecr:GetAuthorizationToken
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                Resource: "*"
+              - Effect: Allow # to create and push logs to CloudWatch
+                Action:
+                  - logs:DescribeLogStreams
+                  - logs:CreateLogStream
+                  - logs:CreateLogGroup
+                  - logs:PutLogEvents
+                Resource: "*"
+              - Effect: Allow # use kms
+                Action:
+                  - kms:Encrypt*
+                  - kms:Decrypt*
+                  - kms:ReEncrypt*
+                  - kms:GenerateDataKey*
+                  - kms:Describe*
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*'
+              - Effect: Allow # to to update load balancers
+                Action:
+                  - elasticloadbalancing:DeregisterInstancesFromLoadBalancer
+                  - elasticloadbalancing:DeregisterTargets
+                  - elasticloadbalancing:Describe*
+                  - elasticloadbalancing:RegisterInstancesWithLoadBalancer
+                  - elasticloadbalancing:RegisterTargets
+                Resource: "*"
+              - Effect: Allow # to get secrets from SecretsManager
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
+                Resource: 
+                  - !Ref pDataBaseCredentials
+                  - !Ref pAuthKey
+                  - !Ref pSecureAuthKey
+                  - !Ref pLoggedInKey
+                  - !Ref pNonceKey
+                  - !Ref pAuthSalt
+                  - !Ref pSecureAuthSalt
+                  - !Ref pLoggedInSalt
+                  - !Ref pNonceSalt
+      Tags:
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Environment
+          Value: !Ref pEnvironmentName
+
+  rEcsTaskRole: # An IAM role to control permissions for the containers in your tasks
+    Type: AWS::IAM::Role
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W28
+            reason: "trade-off for user frienly names in POC"
+          - id: W11
+            reason: "look at the comments"
+          - id: W76
+            reason: "look at the comments"
+    Properties:
+      RoleName: !Sub ${pProjectName}-${AWS::Region}-EcsTaskRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: 
+                - ecs-tasks.amazonaws.com
+            Action: 
+              - sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: !Sub ${pProjectName}-${AWS::Region}-EcsTaskPolicy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow # to create and push logs to CloudWatch
+                Action:
+                  - logs:DescribeLogStreams
+                  - logs:CreateLogStream
+                  - logs:CreateLogGroup
+                  - logs:PutLogEvents
+                Resource: "*"
+              - Effect: Allow # use kms
+                Action:
+                  - kms:Encrypt*
+                  - kms:Decrypt*
+                  - kms:ReEncrypt*
+                  - kms:GenerateDataKey*
+                  - kms:Describe*
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*'
+              - Effect: Allow # permissions required for ECS Exec
+                Action:
+                  - ssmmessages:CreateControlChannel
+                  - ssmmessages:CreateDataChannel
+                  - ssmmessages:OpenControlChannel
+                  - ssmmessages:OpenDataChannel
+                Resource: "*"
+              - Effect: Allow # to get secrets from SecretsManager
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
+                Resource: 
+                  - !Ref pDataBaseCredentials
+                  - !Ref pAuthKey
+                  - !Ref pSecureAuthKey
+                  - !Ref pLoggedInKey
+                  - !Ref pNonceKey
+                  - !Ref pAuthSalt
+                  - !Ref pSecureAuthSalt
+                  - !Ref pLoggedInSalt
+                  - !Ref pNonceSalt
+      Tags:
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Environment
+          Value: !Ref pEnvironmentName
+# -----------
+  rFargateTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      ExecutionRoleArn: !GetAtt rEcsExecutionRole.Arn
+      Family: wordpress
+      Cpu: 512 # The number of cpu units used by the task
+      Memory: 1024 # The amount (in MiB) of memory used by the task.
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      TaskRoleArn: !GetAtt rEcsTaskRole.Arn
+      ContainerDefinitions:
+        - Name: wordpress
+          Image: !Ref pImageUri
+          Essential: true
+          PortMappings:
+            - ContainerPort: 80
+              Protocol: tcp
+          MountPoints:
+            - ContainerPath: /var/www/html/wp-content
+              ReadOnly: false
+              SourceVolume: EFS_DATA
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref rTaskDefLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+          Environment:
+            - Name: WORDPRESS_DB_HOST
+              Value: !Ref pAuroraClusterEndpoint
+            - Name: WORDPRESS_DB_NAME
+              Value: !Ref pDBName
+            - Name: WORDPRESS_DB_USER
+              Value: admin
+            - Name: WORDPRESS_CONFIG_EXTRA
+              Value: !Sub 
+                - |
+                  define( 'WP_HOME', '${Url}' );
+                  define( 'WP_SITEURL', '${Url}' );
+                  define('CONCATENATE_SCRIPTS', false);
+                - {
+                  Url: !Sub "https://${pDomainName}"
+                  }
+          Secrets:
+            - Name: WORDPRESS_DB_PASSWORD
+              ValueFrom: !Sub "${pDataBaseCredentials}:password::"
+            - Name: WORDPRESS_AUTH_KEY
+              ValueFrom: !Ref pAuthKey
+            - Name: WORDPRESS_SECURE_AUTH_KEY
+              ValueFrom: !Ref pSecureAuthKey
+            - Name: WORDPRESS_LOGGED_IN_KEY
+              ValueFrom: !Ref pLoggedInKey
+            - Name: WORDPRESS_NONCE_KEY
+              ValueFrom: !Ref pNonceKey
+            - Name: WORDPRESS_AUTH_SALT
+              ValueFrom: !Ref pAuthSalt
+            - Name: WORDPRESS_SECURE_AUTH_SALT
+              ValueFrom: !Ref pSecureAuthSalt
+            - Name: WORDPRESS_LOGGED_IN_SALT
+              ValueFrom: !Ref pLoggedInSalt
+            - Name: WORDPRESS_NONCE_SALT
+              ValueFrom: !Ref pNonceSalt
+      Volumes:
+        - Name: EFS_DATA
+          EFSVolumeConfiguration:
+            FilesystemId: !Ref pFileSystem
+            TransitEncryption: ENABLED
+      Tags:
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Environment
+          Value: !Ref pEnvironmentName
+  
+  rFargateService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub ${pProjectName}-ecs-service
+      Cluster: !Ref rEcsCluster
+      DesiredCount: 2
+      LaunchType: FARGATE
+      TaskDefinition: !Ref rFargateTaskDefinition
+      DeploymentController:
+        Type: CODE_DEPLOY
+      EnableExecuteCommand: true
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 50
+      LoadBalancers:
+        - ContainerName: wordpress
+          ContainerPort: 80
+          TargetGroupArn: !Ref pAlbTargetGroup
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          SecurityGroups:
+            - !Ref rEcsSecurityGroup
+          Subnets:
+            - !Ref pVpcPrivateSubnet1Id
+            - !Ref pVpcPrivateSubnet2Id
+      Tags:
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Environment
+          Value: !Ref pEnvironmentName
+# -----------
+
+  rServiceAutoScalingRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: "look at the comments"
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: application-autoscaling.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: service-autoscaling
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - application-autoscaling:DeleteScalingPolicy
+                  - application-autoscaling:DeregisterScalableTarget
+                  - application-autoscaling:DescribeScalableTargets
+                  - application-autoscaling:DescribeScalingActivities
+                  - application-autoscaling:DescribeScalingPolicies 
+                  - application-autoscaling:PutScalingPolicy
+                  - application-autoscaling:RegisterScalableTarget
+                  - cloudwatch:DescribeAlarms
+                  - cloudwatch:DeleteAlarms
+                  - cloudwatch:PutMetricAlarm
+                  - ecs:DescribeServices
+                  - ecs:UpdateService
+                Resource: '*'
+  
+  rCPUUtilizationPolicyTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MaxCapacity: !Ref pServiceMaxSize
+      MinCapacity: !Ref pServiceMinSize
+      ResourceId: !Sub service/${rEcsCluster}/${rFargateService.Name}
+      RoleARN: !GetAtt rServiceAutoScalingRole.Arn
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+
+  rEcsTargetTrackingCPUPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub ${pProjectName}-Fargate-TTScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref rCPUUtilizationPolicyTarget
+      TargetTrackingScalingPolicyConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        ScaleInCooldown: 300
+        ScaleOutCooldown: 300
+        TargetValue: 75.0
+
+
+  rAWSCodeDeployRoleForECS:
+    Type: AWS::IAM::Role
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: F38
+            reason: "Conditions are included in the policy to limit its scope"
+          - id: W28
+            reason: "trade-off for user frienly names in POC"
+          - id: W11
+            reason: "look at the comments"
+    Properties:
+      RoleName: !Sub ${pProjectName}-${AWS::Region}-CodeDeployRoleForECS
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: 
+                - codedeploy.amazonaws.com
+            Action: 
+              - sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: service-autoscaling
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecs:DescribeServices
+                  - ecs:CreateTaskSet
+                  - ecs:UpdateServicePrimaryTaskSet
+                  - ecs:DeleteTaskSet
+                  - elasticloadbalancing:DescribeTargetGroups
+                  - elasticloadbalancing:DescribeListeners
+                  - elasticloadbalancing:ModifyListener
+                  - elasticloadbalancing:DescribeRules
+                  - elasticloadbalancing:ModifyRule
+                  - lambda:InvokeFunction
+                  - cloudwatch:DescribeAlarms
+                  - sns:Publish
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                Resource: '*'
+              - Effect: Allow
+                Action: 
+                  - iam:PassRole
+                Resource: '*'
+                Condition:
+                  StringLike:
+                    "iam:PassedToService": "ecs-tasks.amazonaws.com"
+
+  rCodeDeployApplication:
+    Type: AWS::CodeDeploy::Application
+    Properties:
+      ApplicationName: !Sub ${pProjectName}-wordpress
+      ComputePlatform: ECS
+      Tags:
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Environment
+          Value: !Ref pEnvironmentName
+
+  rCodeDepDeploymentGroup:
+    Type: AWS::CodeDeploy::DeploymentGroup
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W28
+            reason: "trade-off for user frienly names in POC"
+    Properties:
+      ApplicationName: !Ref rCodeDeployApplication
+      DeploymentGroupName: !Sub ${pProjectName}-wordpress-dg
+      AutoRollbackConfiguration: 
+        Enabled: true
+        Events:
+          - DEPLOYMENT_FAILURE
+          - DEPLOYMENT_STOP_ON_REQUEST
+      BlueGreenDeploymentConfiguration:
+        DeploymentReadyOption:
+          ActionOnTimeout: CONTINUE_DEPLOYMENT # Register new instances with the load balancer immediately after the new application revision is installed
+          WaitTimeInMinutes: 0 # The number of minutes to wait before the status of a blue/green deployment is changed to Stopped
+        TerminateBlueInstancesOnDeploymentSuccess:
+          Action: TERMINATE
+          TerminationWaitTimeInMinutes: !Ref pTerminationWaitTimeInMinutes
+      DeploymentStyle:
+        DeploymentType: BLUE_GREEN
+        DeploymentOption: WITH_TRAFFIC_CONTROL
+      DeploymentConfigName: !Ref pDeploymentConfiguration
+      ECSServices:
+        - ClusterName: !Sub ${pProjectName}-ecs-cluster
+          ServiceName: !GetAtt rFargateService.Name
+      LoadBalancerInfo:
+        TargetGroupPairInfoList:
+          - TargetGroups:
+              - Name: !Ref pAlbTargetGroup1
+              - Name: !Ref pAlbTargetGroup2
+            ProdTrafficRoute:
+              ListenerArns: 
+                - !Ref pAlbProductionListenerArn
+      OutdatedInstancesStrategy: UPDATE
+      ServiceRoleArn: !GetAtt rAWSCodeDeployRoleForECS.Arn
+      Tags:
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Environment
+          Value: !Ref pEnvironmentName
+
+  rVpcEndpointsSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Gremlin lambda
+      VpcId: !Ref pVpcId
+      SecurityGroupEgress:
+        - Description: Explicit egress group locking down outbound access for HTTPS
+          CidrIp: !Ref pVpcCidrBlock
+          IpProtocol: tcp
+          ToPort: 443
+          FromPort: 443
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          Description: Ingress Rule
+          FromPort: 443
+          ToPort: 443
+          CidrIp: !Ref pVpcCidrBlock
+
+  rEcrDkrEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      SubnetIds:
+        - !Ref pVpcPrivateSubnet1Id
+        - !Ref pVpcPrivateSubnet2Id
+      SecurityGroupIds:
+        - !Ref rVpcEndpointsSg
+      VpcEndpointType: Interface
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.ecr.dkr
+      PrivateDnsEnabled: true
+      VpcId: !Ref pVpcId
+
+  rEcrApiEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      SubnetIds:
+        - !Ref pVpcPrivateSubnet1Id
+        - !Ref pVpcPrivateSubnet2Id
+      SecurityGroupIds:
+        - !Ref rVpcEndpointsSg
+      VpcEndpointType: Interface
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.ecr.api
+      PrivateDnsEnabled: true
+      VpcId: !Ref pVpcId
+
+  rS3Endpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      RouteTableIds:
+        - !Ref pPublicRouteTable
+        - !Ref pPrivateRouteTable1
+        - !Ref pPrivateRouteTable2
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.s3
+      VpcId: !Ref pVpcId
+
+  rLogVPCEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref pVpcPrivateSubnet1Id
+        - !Ref pVpcPrivateSubnet2Id
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.logs
+      VpcId: !Ref pVpcId
+      PrivateDnsEnabled: true
+      SecurityGroupIds:
+        - !Ref rVpcEndpointsSg
+
+  rEcsLogGroupEncryptionKey:
+    Type: AWS::KMS::Key
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: F76
+            reason: "Conditions are included in the policy to limit its scope"
+    Properties:
+      Description: Used to encrypt ECS logs
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: 2012-10-17
+        Id: !Ref AWS::StackName
+        Statement:
+          - Sid: "Enable IAM User Permissions"
+            Effect: Allow
+            Principal:
+              AWS:
+                - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:root
+            Action: kms:*
+            Resource: "*"
+          - Sid: "Allow logs to use the key"
+            Effect: Allow
+            Principal:
+              Service: !Sub "logs.${AWS::Region}.amazonaws.com"
+            Action:
+              - kms:Encrypt*
+              - kms:Decrypt*
+              - kms:ReEncrypt*
+              - kms:GenerateDataKey*
+              - kms:Describe*
+            Resource: "*"
+            Condition:
+              ArnLike:
+                "kms:EncryptionContext:aws:logs:arn": !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${pProjectName}-ecs-logs"
+
+  rEcsLogGroupEncryptionKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub alias/${pProjectName}-ecslogs-key
+      TargetKeyId: !Ref rEcsLogGroupEncryptionKey
+
+
+  rEcsEncryptionKey:
+    Type: AWS::KMS::Key
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: F76
+            reason: "Conditions are included in the policy to limit its scope"
+    Properties:
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: 2012-10-17
+        Id: !Ref AWS::StackName
+        Statement:
+          - Sid: "Enable IAM User Permissions"
+            Effect: Allow
+            Principal:
+              AWS:
+                - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:root
+            Action: kms:*
+            Resource: "*"
+          - Sid: "Allow task role encrypt/decrypt"
+            Effect: "Allow"
+            Principal:
+              AWS:
+                - !GetAtt rEcsTaskRole.Arn
+            Action:
+              - "kms:Encrypt"
+              - "kms:Decrypt"
+            Resource: '*'

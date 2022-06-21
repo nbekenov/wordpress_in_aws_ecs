@@ -1,0 +1,83 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Create EFS
+
+Parameters:
+  pProjectName:
+    Type: String
+    Description: Name of the Project
+  pEnvironmentName:
+    Type: String
+    Description: An environment name that will be prefixed to resource names
+  pVpcId:
+    Type: String
+    Description: VPC ID
+  pVpcCidrBlock:
+    Type: String
+    Description: The CIDR block for the VPC
+  pVpcPrivateSubnet1Id:
+    Type: String
+    Description: The CIDR block for the Private subnet
+  pVpcPrivateSubnet2Id:
+    Type: String
+    Description: The CIDR block for the Private subnet
+  
+
+Resources:
+  rEfsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W28
+            reason: "trade-off for user frienly names in POC"
+          - id: W5
+            reason: "allo egress from everywhere"
+          - id: W40
+            reason: "allo egress with an ipProtocol of -1"
+    Properties:
+      GroupDescription: FileSystem Security Group
+      VpcId: !Ref pVpcId
+      GroupName: !Sub ${pProjectName}-EFS-SG
+      SecurityGroupIngress:
+        - CidrIp: !Ref pVpcCidrBlock
+          Description: "allow access to the EFS file mount"
+          FromPort: 2049
+          ToPort: 2049
+          IpProtocol: "tcp"
+      SecurityGroupEgress:
+        - CidrIp: 0.0.0.0/0
+          Description: "allow all outbound traffic by default"
+          IpProtocol: "-1"  
+
+  rFileSystem: # centralized storage for plugins
+    Type: AWS::EFS::FileSystem
+    DeletionPolicy: Delete
+    Properties:
+      Encrypted: true
+      FileSystemTags:
+        - Key: Name
+          Value: EcsWordpress/content
+        - Key: env
+          Value: !Ref pEnvironmentName 
+      PerformanceMode: generalPurpose
+      ThroughputMode: bursting
+
+  rMountTarget1:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref rFileSystem
+      SubnetId: !Ref pVpcPrivateSubnet1Id
+      SecurityGroups:
+        - !Ref rEfsSecurityGroup
+
+  rMountTarget2:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref rFileSystem
+      SubnetId: !Ref pVpcPrivateSubnet2Id
+      SecurityGroups:
+        - !Ref rEfsSecurityGroup
+
+Outputs:
+  oFilesystemId:
+    Value: !Ref rFileSystem

@@ -1,0 +1,207 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::SecretsManager-2020-07-23
+Description: Create infra
+Parameters:
+  pProjectName:
+    Type: String
+    Description: Name of the Project
+  pEnvironmentName:
+    Type: String
+    Description: An environment name that will be prefixed to resource names
+    AllowedValues:
+      - dev
+      - test
+      - prod
+  pDomainName:
+    Type: String
+    Description: Website domain name
+  pProdHostedZoneId:
+    Type: String
+    Description: Domain name HostedZone ID in Prod account
+    Default: AWS::NoValue
+  pDBName:
+    Type: String
+    Description: Name of the Amazon Aurora database
+    Default: auroramysqldb
+    MaxLength: "63"
+    MinLength: "5"
+  pDBBackupRetentionPeriod:
+    Type: Number
+    Description: Number of days (from 1 to 35) that automatic database snapshots are retained
+    Default: 30
+    MinValue: 1
+    MaxValue: 35
+  pDBInstanceClass:
+    Type: String
+    Description: Name of the compute and memory-capacity class of the database instance
+    ConstraintDescription: "Must select a valid database instance type."
+    AllowedValues:
+      - db.r5.24xlarge
+      - db.r5.16xlarge
+      - db.r5.12xlarge
+      - db.r5.8xlarge
+      - db.r5.4xlarge
+      - db.r5.2xlarge
+      - db.r5.xlarge
+      - db.r5.large
+      - db.r4.16xlarge
+      - db.r4.8xlarge
+      - db.r4.4xlarge
+      - db.r4.2xlarge
+      - db.t3.medium
+      - db.t3.small
+    Default: db.t3.medium
+  pPreferredMaintenanceWindow:
+    Type: String
+    Description: The weekly time range (in UTC) during which system maintenance can occur
+    Default: 'sat:07:00-sat:07:30'
+  pPreferredBackupWindow:
+    Type: String
+    Description: The daily time range in UTC during which you want to create automated backups
+    Default: '09:54-10:24'
+  pServiceMinSize:
+    Type: Number
+    Default: 2
+    Description: Minimum number of tasks that can be launched
+  pServiceMaxSize:
+    Type: Number
+    Default: 4
+    Description: Maximum number of tasks that can be launched
+  pTerminationWaitTimeInMinutes:
+    Type: Number
+    Description: The number of minutes before deleting the original (blue) task set.
+    Default: 20
+  pDevOpsTeamEmail:
+    Type: String
+    Description: Admin email addres to get notifications
+  pDeploymentConfiguration:
+    Type: String
+    Description: Predefined deployment configurations for an Amazon ECS compute platform
+    Default: CodeDeployDefault.ECSCanary10Percent5Minutes # Shifts 10 percent of traffic in the first increment. The remaining 90 percent is deployed five minutes later.
+    AllowedValues:
+      - CodeDeployDefault.ECSLinear10PercentEvery1Minutes
+      - CodeDeployDefault.ECSLinear10PercentEvery3Minutes
+      - CodeDeployDefault.ECSCanary10Percent5Minutes
+      - CodeDeployDefault.ECSCanary10Percent15Minutes
+      - CodeDeployDefault.ECSAllAtOnce
+
+
+Mappings:
+  mSubnetConfig:
+    VPC:
+      CIDR: "10.0.0.0/16"
+    Public1:
+      CIDR: "10.0.0.0/24"
+    Public2:
+      CIDR: "10.0.1.0/24"
+    Private1:
+      CIDR: "10.0.2.0/24"
+    Private2:
+      CIDR: "10.0.3.0/24"
+
+Resources:
+  rVpcStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: vpc.yml
+      TimeoutInMinutes: 20
+      Parameters:
+        pProjectName: !Ref pProjectName
+        pEnvironmentName: !Ref pEnvironmentName
+        pVpcCidrBlock: !FindInMap [ mSubnetConfig, VPC, CIDR ]
+        pPublic1Cidr: !FindInMap [ mSubnetConfig, Public1, CIDR ]
+        pPublic2Cidr: !FindInMap [ mSubnetConfig, Public2, CIDR ]
+        pPrivate1Cidr: !FindInMap [ mSubnetConfig, Private1, CIDR ]
+        pPrivate2Cidr: !FindInMap [ mSubnetConfig, Private2, CIDR ]
+
+  rDnsStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: dns.yml
+      Parameters:
+        pProjectName: !Ref pProjectName
+        pEnvironmentName: !Ref pEnvironmentName
+        pDomainName: !Ref pDomainName
+        pProdHostedZoneId: !Ref pProdHostedZoneId
+        pVpcId: !GetAtt rVpcStack.Outputs.oVpcId
+        pVpcPublicSubnet1Id: !GetAtt rVpcStack.Outputs.oPublicSubnet1
+        pVpcPublicSubnet2Id: !GetAtt rVpcStack.Outputs.oPublicSubnet2
+
+  rRdsStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: rds.yml
+      Parameters:
+        pProjectName: !Ref pProjectName
+        pEnvironmentName: !Ref pEnvironmentName
+        pVpcId: !GetAtt rVpcStack.Outputs.oVpcId
+        pVpcCidrBlock: !GetAtt rVpcStack.Outputs.oVpcCidrBlock
+        pPrivate1Cidr: !FindInMap [ mSubnetConfig, Private1, CIDR ]
+        pPrivate2Cidr: !FindInMap [ mSubnetConfig, Private2, CIDR ]
+        pVpcPrivateSubnet1Id: !GetAtt rVpcStack.Outputs.oPrivateubnet1
+        pVpcPrivateSubnet2Id: !GetAtt rVpcStack.Outputs.oPrivateSubnet2
+        pDBName: !Ref pDBName
+        pDBInstanceClass: !Ref pDBInstanceClass
+        pDBBackupRetentionPeriod: !Ref pDBBackupRetentionPeriod
+        pPreferredMaintenanceWindow: !Ref pPreferredMaintenanceWindow
+        pPreferredBackupWindow: !Ref pPreferredBackupWindow
+        pDevOpsTeamEmail: !Ref pDevOpsTeamEmail
+
+  rEfsStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: efs.yml
+      TimeoutInMinutes: 20
+      Parameters:
+        pProjectName: !Ref pProjectName
+        pEnvironmentName: !Ref pEnvironmentName
+        pVpcId: !GetAtt rVpcStack.Outputs.oVpcId
+        pVpcCidrBlock: !GetAtt rVpcStack.Outputs.oVpcCidrBlock
+        pVpcPrivateSubnet1Id: !GetAtt rVpcStack.Outputs.oPrivateubnet1
+        pVpcPrivateSubnet2Id: !GetAtt rVpcStack.Outputs.oPrivateSubnet2
+  
+  rEcsStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ecs.yml
+      Parameters:
+        pProjectName: !Ref pProjectName
+        pEnvironmentName: !Ref pEnvironmentName
+        pDomainName: !Ref pDomainName
+        pVpcId: !GetAtt rVpcStack.Outputs.oVpcId
+        pVpcPrivateSubnet1Id: !GetAtt rVpcStack.Outputs.oPrivateubnet1
+        pVpcPrivateSubnet2Id: !GetAtt rVpcStack.Outputs.oPrivateSubnet2
+        pFileSystem: !GetAtt rEfsStack.Outputs.oFilesystemId
+        pAuroraClusterEndpoint: !GetAtt rRdsStack.Outputs.oAuroraClusterEndpoint
+        pDBName: !Ref pDBName
+        pAlbTargetGroup: !GetAtt rDnsStack.Outputs.oAlbTargetGroupArn
+        pAlbSecurityGroup: !GetAtt rDnsStack.Outputs.oAlbSecurityGroupId
+        pAlbTargetGroup1: !GetAtt rDnsStack.Outputs.oAlbTargetGroup1
+        pAlbTargetGroup2: !GetAtt rDnsStack.Outputs.oAlbTargetGroup2
+        pAlbProductionListenerArn: !GetAtt rDnsStack.Outputs.oAlbProductionListenerArn
+        pDataBaseCredentials: !GetAtt rRdsStack.Outputs.oDataBaseCredentials
+        pAuthKey: !GetAtt rRdsStack.Outputs.oAuthKey
+        pSecureAuthKey: !GetAtt rRdsStack.Outputs.oSecureAuthKey
+        pLoggedInKey: !GetAtt rRdsStack.Outputs.oLoggedInKey
+        pNonceKey: !GetAtt rRdsStack.Outputs.oNonceKey
+        pAuthSalt: !GetAtt rRdsStack.Outputs.oAuthSalt
+        pSecureAuthSalt: !GetAtt rRdsStack.Outputs.oSecureAuthSalt
+        pLoggedInSalt: !GetAtt rRdsStack.Outputs.oLoggedInSalt
+        pNonceSalt: !GetAtt rRdsStack.Outputs.oNonceSalt
+        pServiceMaxSize: !Ref pServiceMaxSize
+        pServiceMinSize: !Ref pServiceMinSize
+        pTerminationWaitTimeInMinutes: !Ref pTerminationWaitTimeInMinutes
+        pVpcCidrBlock: !GetAtt rVpcStack.Outputs.oVpcCidrBlock
+        pPublicRouteTable: !GetAtt rVpcStack.Outputs.oPublicRouteTable
+        pPrivateRouteTable1: !GetAtt rVpcStack.Outputs.oPrivateRouteTable1
+        pPrivateRouteTable2: !GetAtt rVpcStack.Outputs.oPrivateRouteTable2
+        pDeploymentConfiguration: !Ref pDeploymentConfiguration
+
+  rCloudTrailStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: trail.yml
+      Parameters:
+        pProjectName: !Ref pProjectName
+        pEnvironmentName: !Ref pEnvironmentName
+        pDevOpsTeamEmail: !Ref pDevOpsTeamEmail

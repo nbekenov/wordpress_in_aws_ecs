@@ -1,0 +1,55 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.x
+    commands:
+      - echo Entered the INSTAL phase
+      - echo something something
+      - yum update -y
+      - yum install jq git -y -q
+      - gem install cfn-nag
+      - echo Configuring aws cli...
+      - pip3 install awsebcli --upgrade
+      - pip install --upgrade awscli
+      - pip3 install cfn-lint
+      - aws configure set default.region us-east-1
+  pre_build:
+    commands:
+      - echo Entered the pre_build phase...
+      - echo Current directory is $CODEBUILD_SRC_DIR
+      - ls -la
+      - "export dirname=${PWD##*/}"
+      - echo Directory name $dirname
+      - echo "====================="
+      - mkdir report || echo "dir report exists"
+      - echo static code analysis cfn-lint ...
+      - cfn-lint templates/*.yml
+      - echo validate template ...
+      - aws cloudformation validate-template --template-body file://templates/main.yml
+      - echo static code security analysis cfn-nag ...
+      - cfn_nag_scan --input-path templates --parameter-values-path=prod-configuration.json
+      - cfn_nag_scan --input-path templates --parameter-values-path=prod-configuration.json -o json > ./report/cfn_nag.out.json && echo OK || echo FAILED
+      - echo Completed cfn scanning `date`
+  build:
+    commands:
+      - echo "====================="
+      - echo S3_BUCKET_NAME = $S3_BUCKET_NAME
+      - echo packege code ...
+      - aws cloudformation package --template-file templates/main.yml --s3-bucket $S3_BUCKET_NAME --output-template-file package.yml
+  post_build:
+    commands:
+      - echo "====================="
+      - echo project was successfully built and packaged!
+reports:
+  SecurityReports:
+    files:
+      - report/junit_scan_report.xml
+    discard-paths: 'yes'
+    file-format: JunitXml
+artifacts:
+  files:
+    - package.yml
+    - test-configuration.json
+    - prod-configuration.json

@@ -1,0 +1,498 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Create DNS, CDN, WAF and LoadBalancer
+
+Parameters:
+  pProjectName:
+    Type: String
+    Description: Name of the Project
+  pEnvironmentName:
+    Type: String
+    Description: An environment name that will be prefixed to resource names
+  pDomainName:
+    Type: String
+    Description: Website domain name
+  pProdHostedZoneId:
+    Type: String
+    Description: Domain name HostedZone ID in Prod account
+  pVpcId:
+    Type: String
+    Description: VPC ID
+  pVpcPublicSubnet1Id:
+    Type: String
+    Description: The CIDR block for the Public subnet
+  pVpcPublicSubnet2Id:
+    Type: String
+    Description: The CIDR block for the Public subnet
+
+Conditions:
+  cIsTestAccount: !Equals 
+    - !Ref pEnvironmentName
+    - test
+
+Resources:
+  #### DNS
+  rDomainHostedZone:
+    Type: AWS::Route53::HostedZone
+    Condition: cIsTestAccount # creat only in test account because hosted zone in prod already exists
+    Properties:
+      Name: !Ref pDomainName
+
+  rSubdomainPublicCertificate: 
+    Type: AWS::CertificateManager::Certificate
+    Properties: 
+      DomainName: !Ref pDomainName
+      DomainValidationOptions:
+            - DomainName: !Ref pDomainName
+              HostedZoneId: !If
+                - cIsTestAccount
+                - !Ref rDomainHostedZone
+                - !Ref pProdHostedZoneId
+      ValidationMethod: DNS
+
+  #### CDN
+  rS3BucketLogs:
+    Type: AWS::S3::Bucket
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W35
+            reason: "access logging not necesary in this POC"
+          - id: W51
+            reason: "not necesary in this POC"
+    Properties:
+      AccessControl: LogDeliveryWrite
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !GetAtt rCloudFrontLogsEncryptionKey.KeyId
+      Tags:
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Environment
+          Value: !Ref pEnvironmentName
+
+  rDefaultCachePolicy:
+    Type: AWS::CloudFront::CachePolicy
+    Properties:
+      CachePolicyConfig:
+        Name: wp-defaultcache-policy
+        DefaultTTL: 86400
+        MaxTTL: 31536000
+        MinTTL: 1
+        ParametersInCacheKeyAndForwardedToOrigin:
+          CookiesConfig:
+            CookieBehavior: whitelist
+            Cookies:
+              - "worpress_test_cookie"
+              - "wordpress_*"
+              - "wp-settings*"
+              - "wordpress_logged_in_*"
+          EnableAcceptEncodingGzip: true
+          EnableAcceptEncodingBrotli: true
+          HeadersConfig:
+            HeaderBehavior: whitelist
+            Headers:
+              - "Origin"
+              - "Referer"
+              - "Host"
+          QueryStringsConfig:
+            QueryStringBehavior: all
+
+  rCachePolicy:
+    Type: AWS::CloudFront::CachePolicy
+    Properties:
+      CachePolicyConfig:
+        Name: wp-content-cache-policy
+        DefaultTTL: 86400
+        MaxTTL: 31536000
+        MinTTL: 1
+        ParametersInCacheKeyAndForwardedToOrigin:
+          CookiesConfig:
+            CookieBehavior: "none"
+          EnableAcceptEncodingGzip: true
+          EnableAcceptEncodingBrotli: true
+          HeadersConfig:
+            HeaderBehavior: whitelist
+            Headers:
+              - "Origin"
+              - "Host"
+              - "Access-Control-Request-Method"
+              - "Access-Control-Request-Headers"
+          QueryStringsConfig:
+            QueryStringBehavior: "none"
+
+  rCloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Aliases: 
+          - !Ref pDomainName
+        DefaultCacheBehavior:
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+            - PUT
+            - POST
+            - PATCH
+            - DELETE
+          CachedMethods:
+            - GET
+            - HEAD
+            - OPTIONS            
+          Compress: true
+          CachePolicyId: !Ref rDefaultCachePolicy
+          TargetOriginId: !Sub ${pProjectName}-alborigin
+          ViewerProtocolPolicy: redirect-to-https
+        CacheBehaviors:
+          - PathPattern: "/wp-content/*"
+            TargetOriginId: !Sub ${pProjectName}-alborigin
+            AllowedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+            CachedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+            Compress: true
+            CachePolicyId: !Ref rCachePolicy
+            ViewerProtocolPolicy: redirect-to-https
+          - PathPattern: "/wp-includes/*"
+            TargetOriginId: !Sub ${pProjectName}-alborigin
+            AllowedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+            CachedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+            Compress: true
+            CachePolicyId: !Ref rCachePolicy
+            ViewerProtocolPolicy: redirect-to-https
+          - PathPattern: "/wp-admin/*"
+            TargetOriginId: !Sub ${pProjectName}-alborigin
+            AllowedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+              - PUT
+              - POST
+              - PATCH
+              - DELETE
+            CachedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+            Compress: true
+            CachePolicyId: !Ref rDefaultCachePolicy
+            ViewerProtocolPolicy: redirect-to-https
+          - PathPattern: "/wp-login.php"
+            TargetOriginId: !Sub ${pProjectName}-alborigin
+            AllowedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+              - PUT
+              - POST
+              - PATCH
+              - DELETE
+            CachedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+            Compress: true
+            CachePolicyId: !Ref rDefaultCachePolicy
+            ViewerProtocolPolicy: redirect-to-https
+        Enabled: true
+        HttpVersion: http2
+        IPV6Enabled: true
+        Logging:
+          Bucket: !GetAtt rS3BucketLogs.DomainName
+          IncludeCookies: false
+          Prefix: cdn/
+        Origins:
+          - Id: !Sub ${pProjectName}-alborigin
+            DomainName: !GetAtt rALB.DNSName
+            CustomOriginConfig:
+              HTTPPort: 80
+              HTTPSPort: 443
+              OriginProtocolPolicy: "https-only"
+              OriginSSLProtocols:
+                - "TLSv1.2"
+              OriginReadTimeout: 30 # how long, in seconds, CloudFront waits for a response from the origin
+              OriginKeepaliveTimeout: 30 # how long, in seconds, CloudFront persists its connection to the origin.
+        PriceClass: PriceClass_All
+        ViewerCertificate:
+          AcmCertificateArn: !Ref rSubdomainPublicCertificate
+          MinimumProtocolVersion: TLSv1.2_2021
+          SslSupportMethod: sni-only # The distribution accepts HTTPS connections from only viewers that support server name indication (SNI).
+        WebACLId: !GetAtt rWebACLForCloudFront.Arn # Firewall
+      Tags:
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Environment
+          Value: !Ref pEnvironmentName
+
+  rAliasTargetToCloudFront:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      HostedZoneId: !If
+        - cIsTestAccount
+        - !Ref rDomainHostedZone
+        - !Ref pProdHostedZoneId
+      RecordSets:
+        - Name: !Ref pDomainName
+          Type: A
+          AliasTarget:
+            DNSName: !GetAtt rCloudFrontDistribution.DomainName
+            HostedZoneId: Z2FDTNDATAQYW2
+
+  #### ALB
+  rAlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W28
+            reason: "trade-off for user frienly names in POC"
+          - id: W5
+            reason: "allo egress from everywhere"
+          - id: W40
+            reason: "allo egress with an ipProtocol of -1"
+          - id: W2
+            reason: "public alb"
+          - id: W9
+            reason: "public alb"
+    Properties:
+      GroupDescription: ALB Security Group
+      VpcId: !Ref pVpcId
+      GroupName: !Sub ${pProjectName}-ALB-SG
+      SecurityGroupIngress:
+        - CidrIp: 0.0.0.0/0
+          Description: "allow from anywhere on port 80"
+          FromPort: 80
+          ToPort: 80
+          IpProtocol: "tcp"
+        - CidrIp: 0.0.0.0/0
+          Description: "allow from anywhere on port 443"
+          FromPort: 443
+          ToPort: 443
+          IpProtocol: "tcp"
+      SecurityGroupEgress:
+        - CidrIp: 0.0.0.0/0
+          Description: "allow all outbound traffic by default"
+          IpProtocol: "-1"
+
+  rALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W28
+            reason: "trade-off for user frienly names in POC"
+          - id: W52
+            reason: "tbd right now not requested for POC"
+    Properties:
+      Name: !Sub ${pProjectName}-ALB
+      Scheme: internet-facing
+      SecurityGroups:
+        - !Ref rAlbSecurityGroup
+      Subnets:
+        - !Ref pVpcPublicSubnet1Id
+        - !Ref pVpcPublicSubnet2Id
+      Type: application
+      Tags:
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Environment
+          Value: !Ref pEnvironmentName
+
+  rTargetGroup: # blue target group
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckEnabled: true
+      HealthCheckIntervalSeconds: 60
+      HealthCheckPath: "/"
+      HealthCheckTimeoutSeconds: 40
+      HealthCheckProtocol: HTTP
+      HealthyThresholdCount: 3
+      Matcher:
+        HttpCode: 200-399 # HTTP codes that healthy targets must use when responding to an HTTP health check.
+      Port: 80
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: !Ref pVpcId
+      Tags:
+        - Key: Group
+          Value: blue
+
+  rTargetGroup2: # green target group
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckEnabled: true
+      HealthCheckIntervalSeconds: 60
+      HealthCheckPath: "/"
+      HealthCheckTimeoutSeconds: 40
+      HealthCheckProtocol: HTTP
+      HealthyThresholdCount: 3
+      Matcher:
+        HttpCode: 200-399 # HTTP codes that healthy targets must use when responding to an HTTP health check.
+      Port: 80
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: !Ref pVpcId
+      Tags:
+        - Key: Group
+          Value: green
+
+  rHttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W56
+            reason: "used to redirect http to https"
+    Properties:
+      LoadBalancerArn: !Ref rALB
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - Type: redirect
+          RedirectConfig:
+            Protocol: "HTTPS"
+            Port: 443
+            Host: "#{host}"
+            Path: "/#{path}"
+            Query: "#{query}"
+            StatusCode: "HTTP_301"
+
+  rHttpsListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref rALB
+      Protocol: HTTPS
+      Port: 443
+      Certificates:
+        - CertificateArn: !Ref rSubdomainPublicCertificate
+      SslPolicy: ELBSecurityPolicy-FS-1-2-Res-2019-08
+      DefaultActions:
+        - Type: forward
+          ForwardConfig:
+            TargetGroups:
+              - TargetGroupArn: !Ref rTargetGroup
+                Weight: 1
+
+
+  #### WAF
+  rWebACLForCloudFront:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Description: WebACL for CloudFront
+      DefaultAction:
+        Allow: {}
+      Name: !Sub ${pProjectName}-CloudFront-WebACL
+      Rules:
+        - Name: !Sub ${pProjectName}-AWSManagedRulesCommonRuleSet
+          Priority: 0
+          OverrideAction:
+            None: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: AWSManagedRulesCommonRuleSetMetric
+          Statement:
+            ManagedRuleGroupStatement:
+              ExcludedRules:
+                - Name: SizeRestrictions_BODY
+              VendorName: AWS
+              Name: AWSManagedRulesCommonRuleSet
+        - Name: !Sub ${pProjectName}-AWSManagedRulesWordPressRuleSet
+          Priority: 1
+          OverrideAction:
+            None: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: AWSManagedRulesWordPressRuleSetMetric
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesWordPressRuleSet
+      Scope: CLOUDFRONT
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: !Sub ${pProjectName}-cloudfront-web-acl
+      Tags:
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Environment
+          Value: !Ref pEnvironmentName
+
+  rCloudFrontLogsEncryptionKey:
+    Type: AWS::KMS::Key
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: F76
+            reason: "Conditions are included in the policy to limit its scope"
+    Properties:
+      Description: Used to encrypt cloudtrail logs
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: 2012-10-17
+        Id: !Ref AWS::StackName
+        Statement:
+          - Sid: "Enable IAM User Permissions"
+            Effect: Allow
+            Principal:
+              AWS:
+                - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:root
+            Action: kms:*
+            Resource: "*"
+          - Sid: "Allow CloudFront to use the key to deliver logs"
+            Effect: Allow
+            Principal:
+              Service: "delivery.logs.amazonaws.com"
+            Action:
+              - kms:GenerateDataKey*
+              - kms:Decrypt
+            Resource: "*"
+
+  rCloudFrontLogsEncryptionKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub alias/${pProjectName}-cloudfront-key
+      TargetKeyId: !Ref rCloudFrontLogsEncryptionKey
+
+Outputs:
+  oAlbSecurityGroupId:
+    Description: ALB Security group id
+    Value: !GetAtt rAlbSecurityGroup.GroupId
+  oAlbDNSName:
+    Description: ALB dns name
+    Value: !GetAtt rALB.DNSName
+  oAlbHostedZoneId:
+    Description: ALB hosted zone id
+    Value: !GetAtt rALB.CanonicalHostedZoneID
+  oAlbTargetGroupArn:
+    Description: ALB Blue Target Group Arn
+    Value: !Ref rTargetGroup
+  oAlbTarget2GroupArn:
+    Description: ALB Green Target Group Arn
+    Value: !Ref rTargetGroup2
+  oAlbTargetGroup1:
+    Description: ALB Blue Target Group-1 Name
+    Value: !GetAtt rTargetGroup.TargetGroupName
+  oAlbTargetGroup2:
+    Description: ALB Blue Target Group-2 Name
+    Value: !GetAtt rTargetGroup2.TargetGroupName
+  oAlbProductionListenerArn:
+    Description: ALB Prod listener Arn
+    Value: !GetAtt rHttpsListener.ListenerArn
+  # oAlbTestListenerArn:
+  #   Description: ALB Prod listener Arn
+  #   Value: !GetAtt rTestHttpsListener.ListenerArn

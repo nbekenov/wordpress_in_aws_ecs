@@ -1,0 +1,16 @@
+{
+    "Parameters": {
+        "pEnvironmentName": "test",
+        "pProjectName": "demo-infra",
+        "pDomainName": "xxxxxxxx",
+        "pDBName": "xxxxxxxx",
+        "pDBInstanceClass": "db.t3.medium",
+        "pPreferredMaintenanceWindow": "sat:07:00-sat:07:30",
+        "pPreferredBackupWindow": "09:54-10:24",
+        "pDeploymentConfiguration": "CodeDeployDefault.ECSCanary10Percent5Minutes",
+        "pDevOpsTeamEmail": "xxxxxxxx"
+    },
+    "Tags": {
+        "Application": "worpress-website"
+    }
+}

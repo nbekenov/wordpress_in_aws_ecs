@@ -1,0 +1,631 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::SecretsManager-2020-07-23
+Description: Create RDS and Secrets
+Parameters:
+  pProjectName:
+    Type: String
+    Description: Name of the Project
+  pEnvironmentName:
+    Type: String
+    Description: An environment name that will be prefixed to resource names
+  pVpcId:
+    Type: String
+    Description: VPC ID
+  pVpcCidrBlock:
+    Type: String
+    Description: The CIDR block for the VPC
+  pPrivate1Cidr:
+    Type: String
+    Description: The CIDR block for the private subnet located in Availability Zone 1
+  pPrivate2Cidr:
+    Type: String
+    Description: The CIDR block for the private subnet located in Availability Zone 2
+  pVpcPrivateSubnet1Id:
+    Type: String
+    Description: Private subnet ID
+  pVpcPrivateSubnet2Id:
+    Type: String
+    Description: Private subnet ID
+  pDBName:
+    Type: String
+    Description: Name of the Amazon Aurora database
+  pDBInstanceClass:
+    Type: String
+    Description: Name of the compute and memory-capacity class of the database instance
+  pDBBackupRetentionPeriod:
+    Type: Number
+    Description: Number of days (from 1 to 35) that automatic database snapshots are retained
+  pPreferredMaintenanceWindow:
+    Type: String
+    Description: The weekly time range (in UTC) during which system maintenance can occur
+  pPreferredBackupWindow:
+    Type: String
+    Description: The daily time range in UTC during which you want to create automated backups
+  pDevOpsTeamEmail:
+    Type: String
+    Description: DevOps team email used to receive notifications
+
+Resources:
+  #### Secrets Manager
+  rAuthKey:
+    Type: AWS::SecretsManager::Secret
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W77
+            reason: "use default encryption"
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      GenerateSecretString:
+        ExcludeCharacters: "/@\"'\\"
+        PasswordLength: 64
+      Tags:
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Environment
+          Value: !Ref pEnvironmentName
+  rSecureAuthKey:
+    Type: AWS::SecretsManager::Secret
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W77
+            reason: "use default encryption"
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      GenerateSecretString:
+        ExcludeCharacters: "/@\"'\\"
+        PasswordLength: 64
+      Tags:
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Environment
+          Value: !Ref pEnvironmentName
+  rLoggedInKey:
+    Type: AWS::SecretsManager::Secret
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W77
+            reason: "use default encryption"
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      GenerateSecretString:
+        ExcludeCharacters: "/@\"'\\"
+        PasswordLength: 64
+      Tags:
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Environment
+          Value: !Ref pEnvironmentName
+  rNonceKey:
+    Type: AWS::SecretsManager::Secret
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W77
+            reason: "use default encryption"
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      GenerateSecretString:
+        ExcludeCharacters: "/@\"'\\"
+        PasswordLength: 64
+      Tags:
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Environment
+          Value: !Ref pEnvironmentName
+  rAuthSalt:
+    Type: AWS::SecretsManager::Secret
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W77
+            reason: "use default encryption"
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      GenerateSecretString:
+        ExcludeCharacters: "/@\"'\\"
+        PasswordLength: 64
+      Tags:
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Environment
+          Value: !Ref pEnvironmentName
+  rSecureAuthSalt:
+    Type: AWS::SecretsManager::Secret
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W77
+            reason: "use default encryption"
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      GenerateSecretString:
+        ExcludeCharacters: "/@\"'\\"
+        PasswordLength: 64
+      Tags:
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Environment
+          Value: !Ref pEnvironmentName
+  rLoggedInSalt:
+    Type: AWS::SecretsManager::Secret
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W77
+            reason: "use default encryption"
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      GenerateSecretString:
+        ExcludeCharacters: "/@\"'\\"
+        PasswordLength: 64
+      Tags:
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Environment
+          Value: !Ref pEnvironmentName
+  rNonceSalt:
+    Type: AWS::SecretsManager::Secret
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W77
+            reason: "use default encryption"
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      GenerateSecretString:
+        ExcludeCharacters: "/@\"'\\"
+        PasswordLength: 64
+      Tags:
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Environment
+          Value: !Ref pEnvironmentName
+
+  rDataBaseCredentials:
+    Type: AWS::SecretsManager::Secret
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W77
+            reason: "use default encryption"
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      Description: Credentials for RDS database
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "admin"}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludePunctuation: true
+        ExcludeCharacters: "/@\"'\\"
+        IncludeSpace: false
+      Tags:
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Environment
+          Value: !Ref pEnvironmentName
+
+  rSecretsManagerVPCEndpoint: #VPC endpoint that will enable the rotation Lambda function to make api calls to Secrets Manager 
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      SubnetIds:
+        - !Ref pVpcPrivateSubnet1Id
+        - !Ref pVpcPrivateSubnet2Id
+      SecurityGroupIds:
+        - !Ref rRdsSecurityGroup
+      VpcEndpointType: Interface
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.secretsmanager
+      PrivateDnsEnabled: true
+      VpcId: !Ref pVpcId
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: "*"
+            Action:
+              - secretsmanager:GetSecretValue
+              - secretsmanager:DescribeSecret
+              - secretsmanager:UpdateSecretVersionStage
+              - secretsmanager:PutSecretValue
+            Resource:
+              - !Ref rDataBaseCredentials
+              - !Ref rAuthKey
+              - !Ref rSecureAuthKey
+              - !Ref rLoggedInKey
+              - !Ref rNonceKey
+              - !Ref rAuthSalt
+              - !Ref rSecureAuthSalt
+              - !Ref rLoggedInSalt
+              - !Ref rNonceSalt
+          - Effect: Allow
+            Principal: "*"
+            Action:
+              - secretsmanager:GetRandomPassword
+            Resource: "*"
+
+  rSecretRDSInstanceAttachment:
+    Type: AWS::SecretsManager::SecretTargetAttachment
+    Properties:
+      SecretId: !Ref rDataBaseCredentials
+      TargetId: !Ref rAuroraDBCluster
+      TargetType: AWS::RDS::DBCluster
+  
+  rRDSSecretRotationSchedule:
+    Type: AWS::SecretsManager::RotationSchedule
+    DependsOn:
+      - rSecretRDSInstanceAttachment
+    Properties:
+      SecretId: !Ref rDataBaseCredentials
+      HostedRotationLambda:
+        RotationType: MySQLSingleUser
+        RotationLambdaName: SecretsManagerRotation
+        VpcSecurityGroupIds: !Ref rRdsSecurityGroup
+        VpcSubnetIds: !Join [ ",", [ !Ref pVpcPrivateSubnet1Id, !Ref pVpcPrivateSubnet2Id ] ]
+      RotationRules:
+        Duration: 2h
+        ScheduleExpression: 'cron(0 8 1 * ? *)' # 8:00 AM on the first day of the month
+
+  #### RDS
+  rRdsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W42
+            reason: "allo ingress with an ipProtocol of -1 self"
+          - id: W5
+            reason: "allo egress from everywhere"
+          - id: W40
+            reason: "allo egress with an ipProtocol of -1"
+          - id: W28
+            reason: "trade-off for user frienly names in POC"
+    Properties:
+      GroupDescription: RDS Security Group
+      VpcId: !Ref pVpcId
+      GroupName: !Sub ${pProjectName}-RDS-SG
+      SecurityGroupIngress:
+        - CidrIp: !Ref pVpcCidrBlock
+          Description: "allow connections from within VPC to the database"
+          FromPort: 3306
+          ToPort: 3306
+          IpProtocol: "tcp"
+        - CidrIp: !Ref pPrivate1Cidr
+          Description: "allows traffic from private subnets where Fargate tasks are running - needed for vpc endpoint"
+          FromPort: 443
+          ToPort: 443
+          IpProtocol: "tcp"
+        - CidrIp: !Ref pPrivate2Cidr
+          Description: "allows traffic from private subnets where Fargate tasks are running - needed for vpc endpoint"
+          FromPort: 443
+          ToPort: 443
+          IpProtocol: "tcp"
+      SecurityGroupEgress:
+        - CidrIp: 0.0.0.0/0
+          Description: "allow all outbound traffic by default"
+          IpProtocol: "-1"
+  rRdsSecurityGroupSelfIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt rRdsSecurityGroup.GroupId
+      IpProtocol: '-1'
+      SourceSecurityGroupId: !Ref rRdsSecurityGroup
+      Description: "allows all inbound access from sources with the same security group"
+
+
+  rDBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub ${pProjectName} Subnet Group
+      SubnetIds:
+        - !Ref pVpcPrivateSubnet1Id
+        - !Ref pVpcPrivateSubnet2Id
+
+  rDBClusterParameterGroup:
+    Type: AWS::RDS::DBClusterParameterGroup
+    Properties:
+      Description: Aurora MySQL Cluster Parameter Group
+      Family: aurora-mysql5.7
+      Parameters:
+        time_zone: UTC
+        server_audit_logging: 1
+        server_audit_events: 'QUERY_DCL,QUERY_DDL,CONNECT'
+      Tags:
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Environment
+          Value: !Ref pEnvironmentName    
+  
+  rDBParamGroup:
+    Type: AWS::RDS::DBParameterGroup
+    Properties:
+      Description: Aurora MySQL DB Parameter Group 
+      Family: aurora-mysql5.7
+      Parameters:
+        slow_query_log: '1'
+        long_query_time: '10'
+        log_output: 'FILE'
+        innodb_print_all_deadlocks: '1'
+
+  rAuroraDBCluster:
+    Type: AWS::RDS::DBCluster
+    UpdateReplacePolicy: Snapshot
+    DeletionPolicy: Snapshot
+    Properties:
+      BackupRetentionPeriod: !Ref pDBBackupRetentionPeriod
+      DatabaseName: !Ref pDBName
+      # DeletionProtection: true
+      Engine: aurora-mysql
+      EngineMode: provisioned
+      DBClusterParameterGroupName: !Ref rDBClusterParameterGroup
+      DBSubnetGroupName: !Ref rDBSubnetGroup
+      MasterUsername: !Join [ "", [ "{{resolve:secretsmanager:", !Ref rDataBaseCredentials, ":SecretString:username}}" ] ]
+      MasterUserPassword: !Join [ "", [ "{{resolve:secretsmanager:", !Ref rDataBaseCredentials, ":SecretString:password}}" ] ]
+      Port: 3306
+      KmsKeyId: !GetAtt rDatabaseEncryptionKey.Arn
+      StorageEncrypted: true
+      VpcSecurityGroupIds:
+        - !Ref rRdsSecurityGroup
+      EnableCloudwatchLogsExports: [ error, slowquery, audit ]
+      EnableIAMDatabaseAuthentication: true
+      PreferredBackupWindow: !Ref pPreferredBackupWindow
+      PreferredMaintenanceWindow: !Ref pPreferredMaintenanceWindow
+      Tags:
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Environment
+          Value: !Ref pEnvironmentName
+
+  rAuroraInstance1:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBClusterIdentifier: !Ref rAuroraDBCluster
+      DBInstanceClass: !Ref pDBInstanceClass
+      Engine: aurora-mysql
+      DBParameterGroupName: !Ref rDBParamGroup
+      PubliclyAccessible: false
+      MonitoringInterval: 1
+      MonitoringRoleArn: !GetAtt rMonitoringIAMRole.Arn
+      Tags:
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Environment
+          Value: !Ref pEnvironmentName
+
+  rAuroraInstance2:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBClusterIdentifier: !Ref rAuroraDBCluster
+      DBInstanceClass: !Ref pDBInstanceClass
+      Engine: aurora-mysql
+      DBParameterGroupName: !Ref rDBParamGroup
+      PubliclyAccessible: false
+      MonitoringInterval: 1
+      MonitoringRoleArn: !GetAtt rMonitoringIAMRole.Arn
+      Tags:
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Environment
+          Value: !Ref pEnvironmentName
+
+  rDBAutoScalerTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MaxCapacity: 8
+      MinCapacity: 1
+      ResourceId: !Sub "cluster:${rAuroraDBCluster}"
+      RoleARN: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/aws-service-role/rds.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_RDSCluster"
+      ScalableDimension: rds:cluster:ReadReplicaCount
+      ServiceNamespace: rds
+
+  rDBAutoScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub ${pProjectName}-Aurora-ScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref rDBAutoScalerTarget
+      TargetTrackingScalingPolicyConfiguration:
+        DisableScaleIn: False
+        PredefinedMetricSpecification:
+          PredefinedMetricType: RDSReaderAverageCPUUtilization
+        ScaleInCooldown: 300 # The amount of time, in seconds, after a scale-in activity completes before another scale-in activity can start.
+        ScaleOutCooldown: 300 # The amount of time, in seconds, to wait for a previous scale-out activity to take effect.
+        TargetValue: 50.0
+
+  rMonitoringIAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: "Allow"
+            Principal:
+              Service:
+                - "monitoring.rds.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Path: "/"
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole
+
+  rDatabaseEncryptionKey:
+    Type: AWS::KMS::Key
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: F19
+            reason: "Key rotation would cause the database to become inaccessible"
+          - id: F76
+            reason: "Conditions are included in the policy to limit its scope"
+    Properties:
+      Description: Used to encrypt storage in AuroraDB
+      # EnableKeyRotation: true # https://aws.amazon.com/blogs/database/securing-data-in-amazon-rds-using-aws-kms-encryption/
+      KeyPolicy:
+        Version: 2012-10-17
+        Id: !Ref AWS::StackName
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS:
+                - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:root
+            Action: kms:*
+            Resource: "*"
+          - Effect: Allow
+            Principal:
+              AWS: "*"
+            Action:
+              - kms:Encrypt
+              - kms:Decrypt
+              - kms:ReEncrypt*
+              - kms:GenerateDataKey*
+              - kms:CreateGrant
+              - kms:ListGrants
+              - kms:DescribeKey
+            Resource: "*"
+            Condition:
+              StringEquals:
+                'kms:CallerAccount': !Ref 'AWS::AccountId'
+                'kms:ViaService': !Sub 'rds.${AWS::Region}.amazonaws.com'
+      Tags:
+        - Key: ProjectName
+          Value: !Ref pProjectName
+        - Key: Environment
+          Value: !Ref pEnvironmentName
+  
+  rDatabaseEncryptionKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub alias/${pProjectName}-database-key
+      TargetKeyId: !Ref rDatabaseEncryptionKey
+
+  rDbSnsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub ${pProjectName}-database-notifications
+      Subscription:
+        - Endpoint: !Ref pDevOpsTeamEmail
+          Protocol: email
+      KmsMasterKeyId: !Sub arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:alias/aws/sns
+
+  rCPUUtilizationAlarm1:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      ActionsEnabled: true
+      AlarmActions:
+        - Ref: rDbSnsTopic
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value:
+            Ref: rAuroraInstance1
+      MetricName: CPUUtilization
+      Statistic: Maximum
+      Namespace: 'AWS/RDS'
+      Threshold: 80
+      Unit: Percent
+      ComparisonOperator: 'GreaterThanOrEqualToThreshold'
+      Period: 60
+      EvaluationPeriods: 5
+      TreatMissingData: 'notBreaching'
+
+  rCPUUtilizationAlarm2:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      ActionsEnabled: true
+      AlarmActions:
+        - Ref: rDbSnsTopic
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value:
+            Ref: rAuroraInstance2
+      MetricName: CPUUtilization
+      Statistic: Maximum
+      Namespace: 'AWS/RDS'
+      Threshold: 80
+      Unit: Percent
+      ComparisonOperator: 'GreaterThanOrEqualToThreshold'
+      Period: 60
+      EvaluationPeriods: 5
+      TreatMissingData: 'notBreaching'
+
+  rDatabaseClusterEventSubscription:
+    Type: AWS::RDS::EventSubscription
+    Properties:
+      SourceType: 'db-cluster'
+      Enabled: true
+      EventCategories:
+        - failover
+        - failure
+        - notification
+      SnsTopicArn: !Ref rDbSnsTopic
+      SourceIds: [!Ref rAuroraDBCluster]
+
+  rDatabaseInstanceEventSubscription:
+    Type: AWS::RDS::EventSubscription
+    Properties:
+      SourceType: 'db-instance'
+      Enabled: true
+      EventCategories:
+        - availability
+        - configuration change
+        - deletion
+        - failover
+        - failure
+        - maintenance
+        - notification
+        - recovery
+      SnsTopicArn: !Ref rDbSnsTopic
+      SourceIds: 
+        - !Ref rAuroraInstance1
+        - !Ref rAuroraInstance2
+
+Outputs:
+  oAuroraClusterDBName:
+    Description: "Amazon Aurora database name"
+    Value: !Ref pDBName
+  oAuroraClusterEndpoint:
+    Description: "Amazon Aurora Cluster endpoint"
+    Value: !Sub ${rAuroraDBCluster.Endpoint.Address}:${rAuroraDBCluster.Endpoint.Port}
+  oRdsSecurityGroupId:
+    Description: RDS Security group id
+    Value: !GetAtt rRdsSecurityGroup.GroupId
+  oDataBaseCredentials:
+    Description: RDS Security group id
+    Value: !Ref rDataBaseCredentials
+  oAuthKey:
+    Description: WORDPRESS_AUTH_KEY secret arn
+    Value: !Ref rAuthKey
+  oSecureAuthKey:
+    Description: WORDPRESS_SECURE_AUTH_KEY secret arn
+    Value: !Ref rSecureAuthKey
+  oLoggedInKey:
+    Description: WORDPRESS_LOGGED_IN_KEY secret arn
+    Value: !Ref rLoggedInKey
+  oNonceKey:
+    Description: WORDPRESS_NONCE_KEY secret arn
+    Value: !Ref rNonceKey
+  oAuthSalt:
+    Description: WORDPRESS_AUTH_SALT secret arn
+    Value: !Ref rAuthSalt
+  oSecureAuthSalt:
+    Description: WORDPRESS_SECURE_AUTH_SALT secret arn
+    Value: !Ref rSecureAuthSalt
+  oLoggedInSalt:
+    Description: WORDPRESS_LOGGED_IN_SALT secret arn
+    Value: !Ref rLoggedInSalt
+  oNonceSalt:
+    Description: WORDPRESS_NONCE_SALT secret arn
+    Value: !Ref rNonceSalt
+  
+
+  
