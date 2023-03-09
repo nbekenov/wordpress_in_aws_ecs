@@ -1,0 +1,51 @@
+version: 0.2
+env:
+  variables:
+    IMAGE_REPO_NAME: "demo-app-repository"
+    AWS_DEFAULT_REGION: "us-east-1"
+    IMAGE_VERSION: "latest"
+phases:
+  install:
+    runtime-versions:
+      python: 3.x
+    commands:
+      - echo Entered the INSTAL phase
+      - yum update -y
+      - yum install jq git -y -q
+      - echo Configuring aws cli...
+      - pip3 install awsebcli --upgrade
+      - pip install --upgrade awscli
+      - aws configure set default.region us-east-1
+  pre_build:
+    commands:
+      - cd src
+      - pip3 install -r requirements.txt
+      - python -m pytest -s -vvv tests/unit/ --junitxml=reports/unit.xml
+      - cd ..
+      - AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query 'Account' --output text)
+      - REPOSITORY_URI=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$IMAGE_REPO_NAME
+      - echo Logging in to Amazon ECR... 
+      - $(aws ecr get-login --registry-ids $AWS_ACCOUNT_ID --no-include-email --region $AWS_DEFAULT_REGION)
+  build:
+    commands:
+      - echo Build started on `date`
+      - echo Building the Docker image..
+      - cd src
+      - docker build -t $REPOSITORY_URI:$IMAGE_VERSION .
+      - docker tag $REPOSITORY_URI:$IMAGE_VERSION $REPOSITORY_URI:$IMAGE_VERSION
+      - printf '[{"name":"wordpress","imageUri":"%s"}]' $REPOSITORY_URI:$IMAGE_VERSION > ../imagedefinitions.json
+  post_build:
+    commands:
+      - echo Build completed on `date`
+      - echo Pushing the Docker image...
+      - docker push $REPOSITORY_URI:$IMAGE_VERSION
+artifacts:
+    files: 
+      - imagedefinitions.json
+      - deployspec.yml
+      - scripts/*
+      - deploy/*
+reports:
+  pytest-reports:
+    files:
+      - src/reports/unit.xml

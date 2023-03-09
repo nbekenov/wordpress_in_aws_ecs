@@ -1,0 +1,41 @@
+version: 0.2
+env:
+  variables:
+    IMAGE_REPO_NAME: "demo-app-repository"
+    AWS_DEFAULT_REGION: "us-east-1"
+phases:
+  install:
+    commands:
+      - echo Entered the INSTAL phase
+      - yum update -y
+      - yum install jq git -y -q
+      - echo Configuring aws cli...
+      - pip3 install awsebcli --upgrade
+      - pip install --upgrade awscli
+      - aws configure set default.region us-east-1
+  pre_build:
+    commands:
+      - ls -la
+      - echo ENVIRONMENT_NAME:$ENVIRONMENT_NAME
+      - echo TARGET_ACCOUNT_ID:$TARGET_ACCOUNT_ID
+      - TARGET_ROLE_ARN="arn:$AWS_PARTITION:iam::$TARGET_ACCOUNT_ID:role/demo-app-$AWS_DEFAULT_REGION-CodeBuildCrossTargetAccountRole"
+      - echo TARGET_ROLE_ARN:$TARGET_ROLE_ARN
+      - scripts/assume_role.sh $TARGET_ROLE_ARN $ENVIRONMENT_NAME
+  build:
+    commands:
+      - echo Deploy started on `date`
+      - scripts/create_deployment.sh $ENVIRONMENT_NAME
+  post_build:
+    commands:
+      - echo Build completed on `date`
+      - imageUri=$(cat imagedefinitions.json | jq -r ".[0].imageUri")
+      - taskdefArn=$(cat /tmp/rtd | jq -r .taskDefinition.taskDefinitionArn)
+      - aws ssm put-parameter --overwrite --name "/demo-app/wordpress/image_uri" --value $imageUri --type String --profile=$ENVIRONMENT_NAME
+      - aws ssm put-parameter --overwrite --name "/demo-app/wordpress/taskdef_arn" --value $taskdefArn --type String --profile=$ENVIRONMENT_NAME
+artifacts:
+    files: 
+      - imagedefinitions.json
+      - deployspec.yml
+      - scripts/*
+      - deploy/*
+    # discard-paths: yes
